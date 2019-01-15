@@ -4,9 +4,9 @@
     eve.methods.put
     ~~~~~~~~~~~~~~~
 
-    This module imlements the PUT method.
+    This module implements the PUT method.
 
-    :copyright: (c) 2016 by Nicola Iarocci.
+    :copyright: (c) 2017 by Nicola Iarocci.
     :license: BSD, see LICENSE for more details.
 """
 from datetime import datetime
@@ -14,21 +14,34 @@ from datetime import datetime
 from flask import current_app as app, abort
 from werkzeug import exceptions
 
-from eve.auth import requires_auth
-from eve.defaults import resolve_default_values
-from eve.methods.common import get_document, parse, payload as payload_, \
-    ratelimit, pre_event, store_media_files, resolve_user_restricted_access, \
-    resolve_embedded_fields, build_response_document, marshal_write_response, \
-    resolve_sub_resource_path, resolve_document_etag, oplog_push
+from eve.auth import auth_field_and_value, requires_auth
+from eve.methods.common import (
+    get_document,
+    parse,
+    payload as payload_,
+    ratelimit,
+    pre_event,
+    store_media_files,
+    resolve_user_restricted_access,
+    resolve_embedded_fields,
+    build_response_document,
+    marshal_write_response,
+    resolve_sub_resource_path,
+    resolve_document_etag,
+    oplog_push,
+)
 from eve.methods.post import post_internal
 from eve.utils import config, debug_error_message, parse_request
-from eve.validation import ValidationError
-from eve.versioning import resolve_document_version, \
-    insert_versioning_documents, late_versioning_catch
+from eve.validation import DocumentError
+from eve.versioning import (
+    resolve_document_version,
+    insert_versioning_documents,
+    late_versioning_catch,
+)
 
 
 @ratelimit()
-@requires_auth('item')
+@requires_auth("item")
 @pre_event
 def put(resource, payload=None, **lookup):
     """
@@ -39,17 +52,19 @@ def put(resource, payload=None, **lookup):
     .. versionchanged:: 0.5
        Split into put() and put_internal().
     """
-    return put_internal(resource, payload, concurrency_check=True,
-                        skip_validation=False, **lookup)
+    return put_internal(
+        resource, payload, concurrency_check=True, skip_validation=False, **lookup
+    )
 
 
-def put_internal(resource, payload=None, concurrency_check=False,
-                 skip_validation=False, **lookup):
+def put_internal(
+    resource, payload=None, concurrency_check=False, skip_validation=False, **lookup
+):
     """ Intended for internal put calls, this method is not rate limited,
     authentication is not checked, pre-request events are not raised, and
     concurrency checking is optional. Performs a document replacement.
     Updates are first validated against the resource schema. If validation
-    passes, the document is repalced and an OK status update is returned.
+    passes, the document is replaced and an OK status update is returned.
     If validation fails a set of validation issues is returned.
 
     :param resource: the name of the resource to which the document belongs.
@@ -70,7 +85,7 @@ def put_internal(resource, payload=None, concurrency_check=False,
        Allow restoring soft deleted documents via PUT
 
     .. versionchanged:: 0.5
-       Back to resolving default values after validaton as now the validator
+       Back to resolving default values after validation as now the validator
        can properly validate dependency even when some have default values. See
        #353.
        Original put() has been split into put() and put_internal().
@@ -81,7 +96,7 @@ def put_internal(resource, payload=None, concurrency_check=False,
        through. Fixes #395.
 
     .. versionchanged:: 0.4
-       Allow abort() to be inoked by callback functions.
+       Allow abort() to be invoked by callback functions.
        Resolve default values before validation is performed. See #353.
        Raise 'on_replace' instead of 'on_insert'. The callback function gets
        the document (as opposed to a list of just 1 document) as an argument.
@@ -97,7 +112,7 @@ def put_internal(resource, payload=None, concurrency_check=False,
        Use the new STATUS setting.
        Use the new ISSUES setting.
        Raise pre_<method> event.
-       explictly resolve default values instead of letting them be resolved
+       explicitly resolve default values instead of letting them be resolved
        by common.parse. This avoids a validation error when a read-only field
        also has a default value.
 
@@ -107,30 +122,48 @@ def put_internal(resource, payload=None, concurrency_check=False,
 
     .. versionadded:: 0.1.0
     """
-    resource_def = app.config['DOMAIN'][resource]
-    schema = resource_def['schema']
-    validator = app.validator(schema, resource)
+    resource_def = app.config["DOMAIN"][resource]
+    schema = resource_def["schema"]
+    validator = app.validator(
+        schema, resource=resource, allow_unknown=resource_def["allow_unknown"]
+    )
 
     if payload is None:
         payload = payload_()
 
-    original = get_document(resource, concurrency_check, **lookup)
+    # Retrieve the original document without checking user-restricted access,
+    # but returning the document owner in the projection. This allows us to
+    # prevent PUT if the document exists, but is owned by a different user
+    # than the currently authenticated one.
+    original = get_document(
+        resource,
+        concurrency_check,
+        check_auth_value=False,
+        force_auth_field_projection=True,
+        **lookup
+    )
     if not original:
         if config.UPSERT_ON_PUT:
-            id = lookup[resource_def['id_field']]
+            id = lookup[resource_def["id_field"]]
             # this guard avoids a bson dependency, which would be needed if we
             # wanted to use 'isinstance'. Should also be slightly faster.
-            if schema[resource_def['id_field']].get('type', '') == 'objectid':
+            if schema[resource_def["id_field"]].get("type", "") == "objectid":
                 id = str(id)
-            payload[resource_def['id_field']] = id
+            payload[resource_def["id_field"]] = id
             return post_internal(resource, payl=payload)
         else:
             abort(404)
 
+    # If the document exists, but is owned by someone else, return
+    # 403 Forbidden
+    auth_field, request_auth_value = auth_field_and_value(resource)
+    if auth_field and original.get(auth_field) != request_auth_value:
+        abort(403)
+
     last_modified = None
     etag = None
     issues = {}
-    object_id = original[resource_def['id_field']]
+    object_id = original[resource_def["id_field"]]
 
     response = {}
 
@@ -146,8 +179,7 @@ def put_internal(resource, payload=None, concurrency_check=False,
         if skip_validation:
             validation = True
         else:
-            validation = validator.validate_replace(document, object_id,
-                                                    original)
+            validation = validator.validate_replace(document, object_id, original)
             # Apply coerced values
             document = validator.document
 
@@ -159,7 +191,7 @@ def put_internal(resource, payload=None, concurrency_check=False,
             last_modified = datetime.utcnow().replace(microsecond=0)
             document[config.LAST_UPDATED] = last_modified
             document[config.DATE_CREATED] = original[config.DATE_CREATED]
-            if resource_def['soft_delete'] is True:
+            if resource_def["soft_delete"] is True:
                 # PUT with soft delete enabled should always set the DELETED
                 # field to False. We are either carrying through un-deleted
                 # status, or restoring a soft deleted document
@@ -168,13 +200,12 @@ def put_internal(resource, payload=None, concurrency_check=False,
             # id_field not in document means it is not being automatically
             # handled (it has been set to a field which exists in the
             # resource schema.
-            if resource_def['id_field'] not in document:
-                document[resource_def['id_field']] = object_id
+            if resource_def["id_field"] not in document:
+                document[resource_def["id_field"]] = object_id
 
             resolve_user_restricted_access(document, resource)
-            resolve_default_values(document, resource_def['defaults'])
             store_media_files(document, resource, original)
-            resolve_document_version(document, resource, 'PUT', original)
+            resolve_document_version(document, resource, "PUT", original)
 
             # notify callbacks
             getattr(app, "on_replace")(resource, document, original)
@@ -184,15 +215,13 @@ def put_internal(resource, payload=None, concurrency_check=False,
 
             # write to db
             try:
-                app.data.replace(
-                    resource, object_id, document, original)
+                app.data.replace(resource, object_id, document, original)
             except app.data.OriginalChangedError:
                 if concurrency_check:
-                    abort(412,
-                          description='Client and server etags don\'t match')
+                    abort(412, description="Client and server etags don't match")
 
             # update oplog if needed
-            oplog_push(resource, document, 'PUT')
+            oplog_push(resource, document, "PUT")
 
             insert_versioning_documents(resource, document)
 
@@ -201,25 +230,22 @@ def put_internal(resource, payload=None, concurrency_check=False,
             getattr(app, "on_replaced_%s" % resource)(document, original)
 
             # build the full response document
-            build_response_document(
-                document, resource, embedded_fields, document)
+            build_response_document(document, resource, embedded_fields, document)
             response = document
             if config.IF_MATCH:
                 etag = response[config.ETAG]
         else:
             issues = validator.errors
-    except ValidationError as e:
+    except DocumentError as e:
         # TODO should probably log the error and abort 400 instead (when we
         # got logging)
-        issues['validator exception'] = str(e)
+        issues["validator exception"] = str(e)
     except exceptions.HTTPException as e:
         raise e
     except Exception as e:
         # consider all other exceptions as Bad Requests
         app.logger.exception(e)
-        abort(400, description=debug_error_message(
-            'An exception occurred: %s' % e
-        ))
+        abort(400, description=debug_error_message("An exception occurred: %s" % e))
 
     if len(issues):
         response[config.ISSUES] = issues

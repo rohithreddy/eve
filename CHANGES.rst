@@ -1,13 +1,429 @@
-Changelog
-=========
+Eve Changelog
+=============
 
 Here you can see the full list of changes between each Eve release.
 
-In Development
---------------
+Version 0.8.2
+-------------
+
+Fixed
+~~~~~
+- CORS response headers missing for media endpoint (`#1197`_)
+
+.. _`#1197`: https://github.com/pyeve/eve/issues/1197
+
+Version 0.8.1
+-------------
+
+Released on October 4, 2018.
+
+New
+~~~
+- Add support for Mongo ``$centerSphere`` query operator (`#1181`_)
+- ``NORMALIZE_DOTTED_FIELDS``. If ``True``, dotted fields are parsed and
+  processed as subdocument fields. If ``False``, dotted fields are left
+  unparsed and unprocessed and the payload is passed to the underlying
+  data-layer as-is. Please note that with the default Mongo layer, setting this
+  to ``False`` will result in an error. Defaults to ``True``. (`#1173`_)
+- ``normalize_dotted_fields``. Endpoint-level override
+  for ``NORMALIZE_DOTTED_FIELDS``. (`#1173`_)
+
+Fixed
+~~~~~
+- ``mongo_indexes``: "OperationFailure" when changing the keys of an existing index (`#1180`_)
+- v0.8: "OperationFailure" performing MongoDB full text searches (`#1176`_)
+- "AttributeError" on Python 2.7 when obsolete ``JSON`` or ``XML`` settings are used (`#1175`_).
+- "TypeError argument of type 'NoneType' is not iterable" error when using document embedding in conjuction with soft deletes (`#1120`_)
+- ``allow_unknown`` validation rule fails with nested dict fields (`#1163`_)
+- Updating a field with a nullable data relation fails when value is null (`#1159`_)
+- "cerberus.schema.SchemaError" when ``VALIDATE_FILTERS = True``. (`#1154`_)
+- Serializers fails when array of types is in schema. (`#1112`_)
+- Replace the broken ``make audit`` shortcut with ``make check``, add the
+  command to ``CONTRIBUTING.rst`` it was missing.  (`#1144`_)
+
+Improved
+~~~~~~~~
+- Perform lint checks and fixes on staged files, as a pre-commit hook.
+  (`#1157`_)
+- On CI, perform linting checks first. If linting checks are successful,
+  execute the test suite on the whole matrix. (`#1156`_)
+- Reformat code to match Black code-style. (`#1155`_)
+- Use ``simplejson`` everywhere in the codebase. (`#1148`_)
+- Install a bot that flags and closes stale issues/pull requests. (`#1145`_)
+- Only set the package version in ``__init__.py``. (`#1142`_)
+
+Docs
+~~~~
+- Typos (`#1183`_, `#1184`_, `#1185`_)
+- Add ``MONGO_AUTH_SOURCE`` to Quickstart. (`#1168`_)
+- Fix Sphinx-embedly error when embedding speakerdeck.com slide deck. (`#1158`_)
+- Fix broken link to the Postman app. (`#1150`_)
+- Update obsolete PyPI link in docs sidebar. (`#1152`_)
+- Only display the version number on the docs homepage. (`#1151`_)
+- Fix documentation builds on Read the Docs. (`#1147`_)
+- Add a ``ISSUE_TEMPLATE.md`` GitHub template file. (`#1146`_)
+- Improve changelog format to reduce noise and increase readability. (`#1143`_)
+
+.. _`#1185`: https://github.com/pyeve/eve/pull/1185
+.. _`#1184`: https://github.com/pyeve/eve/pull/1184
+.. _`#1183`: https://github.com/pyeve/eve/pull/1183
+.. _`#1181`: https://github.com/pyeve/eve/issues/1181
+.. _`#1180`: https://github.com/pyeve/eve/issues/1180
+.. _`#1176`: https://github.com/pyeve/eve/issues/1176
+.. _`#1175`: https://github.com/pyeve/eve/issues/1175
+.. _`#1173`: https://github.com/pyeve/eve/issues/1173
+.. _`#1168`: https://github.com/pyeve/eve/issues/1168
+.. _`#1142`: https://github.com/pyeve/eve/issues/1142
+.. _`#1143`: https://github.com/pyeve/eve/issues/1143
+.. _`#1144`: https://github.com/pyeve/eve/issues/1144
+.. _`#1145`: https://github.com/pyeve/eve/issues/1145
+.. _`#1146`: https://github.com/pyeve/eve/issues/1146
+.. _`#1147`: https://github.com/pyeve/eve/issues/1147
+.. _`#1148`: https://github.com/pyeve/eve/issues/1148
+.. _`#1151`: https://github.com/pyeve/eve/issues/1151
+.. _`#1152`: https://github.com/pyeve/eve/issues/1152
+.. _`#1150`: https://github.com/pyeve/eve/issues/1150
+.. _`#1112`: https://github.com/pyeve/eve/issues/1112
+.. _`#1154`: https://github.com/pyeve/eve/issues/1154
+.. _`#1155`: https://github.com/pyeve/eve/issues/1155
+.. _`#1156`: https://github.com/pyeve/eve/issues/1156
+.. _`#1157`: https://github.com/pyeve/eve/issues/1157
+.. _`#1158`: https://github.com/pyeve/eve/issues/1158
+.. _`#1159`: https://github.com/pyeve/eve/issues/1159
+.. _`#1163`: https://github.com/pyeve/eve/issues/1163
+.. _`#1120`: https://github.com/pyeve/eve/issues/1120
+
+Version 0.8
+-----------
+
+Released on May 10, 2018.
+
+.. note::
+
+    Make sure you read the :ref:`Breaking Changes <breaking_changes>` section below.
+
+- New: support for `partial media requests`_. Clients can request partial file
+  downloads by adding a ``Range`` header to their media request (`#1050`_).
+- New: `Renderer classes`_. ``RENDERER`` allows to change enabled renderers.
+  Defaults to ``['eve.render.JSONRenderer', 'eve.render.XMLRenderer']``. You
+  can create your own renderer by subclassing ``eve.render.Renderer``. Each
+  renderer should set valid mime attr and have ``.render()`` method
+  implemented. Please note that at least one renderer must always be enabled
+  (`#1092`_).
+- New: ``on_delete_resource_originals`` fired when soft deletion occurs
+  (`#1030`_).
+- New: ``before_aggregation`` and ``after_aggregation`` event hooks allow to
+  attach `custom callbacks to aggregation endpoints`_ (`#1057`_).
+- New: ``JSON_REQUEST_CONTENT_TYPES`` or supported JSON content types. Useful
+  when you need support for vendor-specific json types. Please note: responses
+  will still carry the standard ``application/json`` type. Defaults to
+  ``['application/json']`` (`#1024`_).
+- New: when the media endpoint is enabled, the default authentication class
+  will be used to secure  it. (`#1083`_; `#1049`_).
+- New: ``MERGE_NESTED_DOCUMENTS``. If ``True``, updates to nested fields are
+  merged with the current data on ``PATCH``. If ``False``, the updates
+  overwrite the current data. Defaults to ``True`` (`#1140`_).
+- New: support for MongoDB decimal type ``bson.decimal128.Decimal128``
+  (`#1045`_).
+- New: Support for ``Feature`` and ``FeatureCollection`` GeoJSON objects
+  (`#769`_).
+- New: Add support for MongoDB ``$box`` geo query operator (`#1122`_).
+- New: ``ALLOW_CUSTOM_FIELDS_IN_GEOJSON`` allows custom fields in GeoJSON
+  (`#1004`_).
+- New: Add support for MongoDB ``$caseSensitive`` and ``$diactricSensitive``
+  query operators (`#1126`_).
+- New: Add support for MongoDB bitwise query operators ``$bitsAllClear``,
+  ``$bitsAllSet``, ``$bitsAnyClear``, ``$bitsAnySet`` (`#1053`_).
+- New: support for ``MONGO_AUTH_MECHANISM`` and
+  ``MONGO_AUTH_MECHANISM_PROPERTIES``.
+- New: ``MONGO_DBNAME`` can now be used in conjuction with ``MONGO_URI``.
+  Previously, if ``MONGO_URI`` was missing the database name, an exception
+  would be rised (`#1037`_).
+- Fix: OPLOG skipped even if ``OPLOG = True`` (`#1074`_).
+- Fix: Cannot define default projection and request specific field. (`#1036`_).
+- Fix: ``VALIDATE_FILTERS`` and ``ALLOWED_FILTERS`` do not work with
+  sub-document fields. (`#1123`_).
+- Fix: Aggregation query parameter does not replace keys in the lists
+  (`#1025`_).
+- Fix: serialization bug that randomly skips fields if "x_of" is encountered
+  (`#1042`_)
+- Fix: PUT behavior with User Restricted Resource Access. Ensure that, under
+  every circumstance, users are unable to overwrite items owned by other users
+  (`#1130`_).
+- Fix: Crash with Cerberus 1.2 (`#1137`_).
+- Fix documentation typos (`#1114`_, `#1102`_)
+- Fix: broken documentation links to Cerberus validation rules.
+- Fix: add sphinxcontrib-embedly to dev-requirements.txt.
+- Fix: Removed OrderedDict dependency; use ``OrderedDict`` from
+  ``backport_collections`` instead (`#1070`_).
+- Performance improved on retrieving a list of embedded documents (`#1029`_).
+- Dev: Refactor index creation. We now have a new
+  ``eve.io.mongo.ensure_mongo_indexes()`` function which ensures that eventual
+  ``mongo_indexes`` defined for a resource are created on the active database.
+  The function can be imported and invoked, for example in multi-db workflows
+  where a db is activated based on the authenticated user performing the
+  request (via custom auth classes).
+- Dev: Add a `Makefile with shortcuts`_ for testing, docs building, and
+  development install.
+- Dev: Switch to pytest as the standard testing tool.
+- Dev: Drop ``requiments.txt`` and ``dev-requirements.txt``. Use ``pip install
+  -e .[dev|tests|docs]`` instead.
+- Tests: finally acknowledge the existence of modern APIs for both Mongo and
+  Python (get rid of most deprecation warnings).
+- Change: Support for Cerberus 1.0+ (`#776`_).
+- Change: ``JSON`` and ``XML`` settings are deprecated and will be removed in
+  a future update. Use ``RENDERERS`` instead (`#1092`_).
+- Flask dependency set to >=1.0 (`#1111`_).
+- PyMongo dependency set to >=3.5.
+- Events dependency set to >=v0.3.
+- Drop Flask-PyMongo dependency, use custom code instead (`#855`_).
+- Docs: Comprehensive rewrite of the `How to contribute`_ page.
+- Docs: Drop the testing page; merge its contents with `How to contribute`_.
+- Docs: Add link to the `Eve course`_. It was authored by the project author,
+  and it is hosted by TalkPython Training.
+- Docs: code snippets are now Python 3 compatibile (Pahaz Blinov).
+- Dev: Delete and cleanup of some unnecessary code.
+- Dev: after the latest update (May 4th) travis-ci would not run tests on
+  Python 2.6.
+- Dev: all branches are now tested on travis-ci. Previously, only 'master' was
+  being tested.
+- Dev: fix insidious bug in ``tests.methods.post.TestPost`` class.
+
+.. _breaking_changes:
+
+Breaking Changes
+~~~~~~~~~~~~~~~~
+- Python 2.6 and Python 3.3 are no longer supported (`#1129`_).
+- Eve now relies on `Cerberus`_ 1.1+  (`#776`_). It allows for many new
+  powerful validation and trasformation features (like `schema registries`_),
+  improved performance and, in general, a more streamlined API. It also brings
+  some notable breaking changes.
+
+    - ``keyschema`` was renamed to ``valueschema``, and ``propertyschema`` to
+      ``keyschema``.
+    - A PATCH on a document which misses a field having a default value will
+      now result in setting this value, even if the field was not provided in
+      the PATCH's payload.
+    - Error messages for ``keyschema`` are now returned as dictionary. Example:
+      ``{'a_dict': {'a_field': "value does not match regex '[a-z]+'"}}``.
+    - Error messages for type validations are `different now`_.
+    - It is no longer valid to have a field with ``default = None`` and
+      ``nullable = False`` (see
+      *patch.py:test_patch_nested_document_nullable_missing*).
+    - And more. A complete list of breaking changes  is available here_. For
+      detailed upgrade instructions, see Cerberus `upgrade notes`_. An in-depth
+      analysis of changes made to the codebase (useful if you wrote a custom
+      validator which needs to be upgraded) is available with `this commit
+      message`_.
+    - Special thanks to Dominik Kellner and Brad P. Crochet for the amazing job
+      done on this upgrade.
+
+- Config setting ``MONGO_AUTHDBNAME`` renamed into ``MONGO_AUTH_SOURCE`` for
+  naming consistency with PyMongo.
+- Config options ``MONGO_MAX_POOL_SIZE``, ``MONGO_SOCKET_TIMEOUT_MS``,
+  ``MONGO_CONNECT_TIMEOUT_MS``, ``MONGO_REPLICA_SET``,
+  ``MONGO_READ_PREFERENCE`` removed. Use ``MONGO_OPTIONS`` or ``MONGO_URI``
+  instead.
+- Be aware that ``DELETE`` on sub-resource endpoint will now only delete the
+  documents matching endpoint semantics. A delete operation on
+  ``people/51f63e0838345b6dcd7eabff/invoices`` will delete all documents
+  matching the followig query: ``{'contact_id': '51f63e0838345b6dcd7eabff'}``
+  (`#1010`_).
+
+.. _#1140: https://github.com/pyeve/eve/pull/1140
+.. _#1111: https://github.com/pyeve/eve/issues/1111
+.. _#1129: https://github.com/pyeve/eve/issues/1129
+.. _#1057: https://github.com/pyeve/eve/issues/1057
+.. _#1137: https://github.com/pyeve/eve/issues/1137
+.. _#1122: https://github.com/pyeve/eve/issues/1122
+.. _#1050: https://github.com/pyeve/eve/pull/1050
+.. _#1130: https://github.com/pyeve/eve/pull/1130
+.. _#1074: https://github.com/pyeve/eve/issues/1074
+.. _#1036: https://github.com/pyeve/eve/issues/1036
+.. _#1128: https://github.com/pyeve/eve/pull/1128
+.. _#1126: https://github.com/pyeve/eve/pull/1126
+.. _#1123: https://github.com/pyeve/eve/issues/1123
+.. _#1102: https://github.com/pyeve/eve/pull/1102
+.. _#1114: https://github.com/pyeve/eve/pull/1114
+.. _#1092: https://github.com/pyeve/eve/pull/1092
+.. _#1083: https://github.com/pyeve/eve/issues/1083
+.. _#1049: https://github.com/pyeve/eve/issues/1049
+.. _#1053: https://github.com/pyeve/eve/issues/1053
+.. _#1070: https://github.com/pyeve/eve/pull/1070
+.. _#1045: https://github.com/pyeve/eve/issues/1045
+.. _#1042: https://github.com/pyeve/eve/pull/1042
+.. _#1030: https://github.com/pyeve/eve/pull/1030
+.. _#1037: https://github.com/pyeve/eve/issues/1037
+.. _#1029: https://github.com/pyeve/eve/issues/1029
+.. _#1024: https://github.com/pyeve/eve/issues/1024
+.. _#769: https://github.com/pyeve/eve/issues/769
+.. _#1004: https://github.com/pyeve/eve/issues/1004
+.. _#776: https://github.com/pyeve/eve/issues/776
+.. _#855: https://github.com/pyeve/eve/issues/855
+.. _#1010: https://github.com/pyeve/eve/issues/1010
+.. _#1025: https://github.com/pyeve/eve/issues/1025
+.. _Cerberus: http://python-cerberus.org
+.. _`schema registries`: http://docs.python-cerberus.org/en/stable/schemas.html#registries
+.. _`different now`: http://docs.python-cerberus.org/en/stable/upgrading.html#data-types
+.. _here: http://docs.python-cerberus.org/en/stable/changelog.html#breaking-changes
+.. _`upgrade notes`: http://python-cerberus.org/en/stable/upgrading.html
+.. _`this commit message`: https://github.com/pyeve/eve/pull/1001/commits/1110f807b478efa9f13ad1d217d22ceaa2a9e42d
+.. _`partial media requests`: http://python-eve.org/features.html#partial-media-downloads
+.. _`custom callbacks to aggregation endpoints`: http://python-eve.org/features.html#aggregation-event-hooks
+.. _`Renderer classes`: http://python-eve.org/features.html#rendering
+.. _`makefile with shortcuts`: http://python-eve.org/contributing.html#make-targets
+.. _`How to contribute`: http://python-eve.org/contributing.html
+.. _`Eve course`: https://training.talkpython.fm/courses/explore_eve/eve-building-restful-mongodb-backed-apis-course
+
+Version 0.7.10
+~~~~~~~~~~~~~~
+
+Released on July 15, 2018.
+
+- Fix: Pin Flask-PyMongo dependency to avoid crash with Flask-PyMongo 2. Closes #1172.
+
+Version 0.7.9
+~~~~~~~~~~~~~
+
+Released on May 10, 2018
+
+- Python 2.6 and Python 3.3 are deprecated. Closes #1129.
+
+Version 0.7.8
+~~~~~~~~~~~~~
+
+Released on 7 February, 2018
+
+- Fix: breaking syntax error in v0.7.7
+
+Version 0.7.7
+~~~~~~~~~~~~~
+
+Released on 7 February, 2018
+
+- Fix: geo queries now properly support ``$geometry`` and ``$maxDistance``
+  operators. Closes #1103.
+
+Version 0.7.6
+~~~~~~~~~~~~~
+
+Released on 14 January, 2018
+
+- Improve query parsing robustness.
+
+Version 0.7.5
+~~~~~~~~~~~~~
+
+Released on 4 December, 2017
+
+- Fix: A query was not fully traversed in the sanitization. Therefore the
+  blacklist for mongo wueries could be bypassed, allowing for dangerous
+  ``$where`` queries (Moritz Schneider).
+
+Version 0.7.4
+~~~~~~~~~~~~~
+
+Released on 24 May, 2017
+
+- Fix: ``post_internal`` fails when using ``URL_PREFIX`` or ``API_VERSION``.
+  Closes #810.
+
+Version 0.7.3
+~~~~~~~~~~~~~
+
+Released on 3 May, 2017
+
+- Eve and Cerberus are now collaboratively funded projects, see:
+  https://nicolaiarocci.com/eve-and-cerberus-funding-campaign/
+- Fix: Internal resource, oplog enabled: a ``*_internal`` method defined in
+  ``OPLOG_METHODS`` triggers keyerror (Einar Huseby).
+- Dev: use official Alabaster theme instead of custom fork.
+- Fix: docstrings typos (Martin Fous).
+- Docs: explain that ``ALLOW_UNKNOWN`` can also be used to expose the whole
+  document as found in the database, with no explicit validation schema.
+  Addresses #995.
+- Docs: add Eve-Healthcheck to extensions list (Luis Fernando Gomes).
+
+Version 0.7.2
+~~~~~~~~~~~~~
+
+Released on 6 March, 2017
+
+- Fix: Validation exceptions are returned in ``doc_issues['validator
+  exception']`` across all edit methods (POST, PUT, PATCH). Closes #994.
+- Fix: When there is ``MONGO_URI`` defined it will be used no matter if the
+  resource is using a prefix or not (Petr Jašek).
+- Docs: Add code snippet with an example of how to implement a simple list of
+  items that supports both list-level and item-level CRUD operations (John
+  Chang).
+
+Version 0.7.1
+~~~~~~~~~~~~~
+
+Released on 14 February, 2017
+
+- Fix: "Cannot create a consistent method resolution order" on Python 3.5.2 and
+  3.6 since Eve 0.7. Closes #984.
+
+- Docs: update README with svg bade (Sobolev Nikita).
+- Docs: fix typo and dead link to Nicola's website (Dominik Kellner).
+
+- ``develop`` branch has been dropped. ``master`` is now the default project
+  branch.
 
 Version 0.7
 ~~~~~~~~~~~
+
+Released on 6 February, 2017
+
+- New: Add Python 3.6 as a supported interpreter.
+
+- New: ``OPTIMIZE_PAGINATION_FOR_SPEED``. Set this to ``True`` to improve
+  pagination performance. When optimization is active no count operation, which
+  can be slow on large collections, is performed on the database. This does
+  have a few consequences. Firstly, no document count is returned. Secondly,
+  ``HATEOAS`` is less accurate: no last page link is available, and next page
+  link is always included, even on last page. On big collections, switching
+  this feature on can greatly improve performance. Defaults to ``False``
+  (slower performance; document count included; accurate ``HATEOAS``). Closes
+  #944 and #853.
+
+
+- New: ``Location`` header is returned on ``201 Created`` POST responses. If
+  will contain the URI to the created document. If bulk inserts are enabled,
+  only the first document URI is returned. Closes #795.
+
+- New: Pretty printing.You can pretty print the response by specifying a query
+  parameter named ``?pretty`` (Hasan Pekdemir).
+
+- New: ``AUTO_COLLAPSE_MULTI_KEYS``. If set to ``True``, multiple values sent
+  with the same key, submitted using the ``application/x-www-form-urlencoded``
+  or ``multipart/form-data`` content types, will automatically be converted to
+  a list of values. When using this together with ``AUTO_CREATE_LISTS`` it
+  becomes possible to use lists of media fields. Defaults to ``False``. Closes
+  #932 (Conrad Burchert).
+
+- New: ``AUTO_CREATE_LISTS``. When submitting a non ``list`` type value for
+  a field with type ``list``, automatically create a one element list before
+  running the validators. Defaults to ``False`` (Conrad Burchert).
+
+- New: Flask-PyMongo compatibility for for ``MONGO_CONNECT`` config setting
+  (Massimo Scamarcia).
+
+- New: Add Python 3.5 as a supported interpreter (Mattias Lundberg).
+
+- New: ``MONGO_OPTIONS`` allows MongoDB arguments to be passed to the
+  MongoClient object. Defaults to ``{}`` (Massimo Scamarcia).
+
+- New: Regexes are allowed by setting ``X_DOMAINS_RE`` values. This allows CORS
+  to support websites with dynamic ranges of subdomains. Closes #660 and #974.
+
+- New: If ``ENFORCE_IF_MATCH`` option is active, then all requests are expected
+  to include the ``If-Match`` or they will be rejected (same as old behavior).
+  However, if ``ENFORCE_IF_MATCH`` is disabled, then client determines whether
+  request is conditional. When ``If-Match`` is included, then request is
+  conditional, otherwise the request is processed with no conditional checks.
+  Closes #657 (Arthur Burkart).
 
 - New: Allow old document versions to be cache validated using ETags (Nick
   Park).
@@ -17,13 +433,13 @@ Version 0.7
 
 - New: ``on_oplog_push`` event is fired when OPLOG is about to be updated.
   Callbacks receive two arguments: ``resource`` (resource name) and ``entries``
-  (list of oplog entries which are about to be written). 
+  (list of oplog entries which are about to be written).
 
 - New: optional ``extra`` field is available for OPLOG entries. Can be updated
   by callbacks hooked to the new ``on_oplog_push`` event.
 
 - New: OPLOG audit now include the username or token when available. Closes
-  #846. 
+  #846.
 
 - New ``get_internal`` and ``getitem_internal`` functions can be used for
   internal GET calls. These methods are not rate limited, authentication is not
@@ -56,21 +472,80 @@ Version 0.7
 - Change: ETag response header now conforms to RFC 7232/2.3 and is surrounded
   by double quotes. Closes #794.
 
+- Fix: Better locating of ``settings.py``. On startup, if settings flag is
+  omitted in constructor, Eve will try to locate file named settings.py, first
+  in the application folder and then in one of the application's subfolders.
+  You can choose an alternative filename/path, just pass it as an argument when
+  you instantiate the application. If the file path is relative, Eve will try
+  to locate it recursively in one of the folders in your sys.path, therefore
+  you have to be sure that your application root is appended to it. This is
+  useful, for example, in testing environments, when settings file is not
+  necessarily located in the root of your application. Closes #820 (Mario
+  Kralj).
+
+- Fix: Versioning does not work with User Restricted Resource Access. Closes
+  #967 (Kris Lambrechts)
+
+- Fix: ``test_create_indexes()`` typo. Closes 960.
+
+- Fix: fix crash when attempting to modify a document ``_id`` on MongoDB 3.4
+  (Giorgos Margaritis)
+
+- Fix: improve serialization of boolean values. Closes #947 (NotSpecial).
+
+- Fix: fix intermittently failing test. Closes #934 (Conrad Burchert).
+
+- Fix: Multiple, fast (within a 1 second window) and neutral (no actual changes)
+  PATCH requests should not raise ``412 Precondition Failed``. Closes #920.
+
+- Fix: Resource titles are not properly escaped during the XML rendering of the
+  root document (Kris Lambrechts).
+
 - Fix: ETag request headers which conform to RFC 7232/2.3 (double quoted value)
   are now properly processed. Addresses #794.
+
+- Fix: Deprecation warning from Flask. Closes #898 (George Lestaris).
+
+- Fix: add Support serialization on lists using anyof, oneof, allof, noneof.
+  Closes #876 (Carles Bruguera).
+
+- Fix: update security example snippets to match with current API (Stanislav
+  Filin).
+
+- Fix: ``notifications.py`` example snippet crashes due to lack of ``DOMAIN``
+  setting (Stanislav Filin).
+
+- Docs: clarify documentation for custom validators: Cerberus dependency is
+  still pinned to version 0.9.2. Upgrade to Cerberus 1.0+ is planned with v0.8.
+  Closes #796.
+- Docs: remove the deprecated ``--ditribute`` virtualenv option (Eugene
+  Prikazchikov).
+- Docs: add date and subdocument fields filtering examples. Closes #924.
+- Docs: add Eve-Neo4j to the extensions page (Rodrigo Rodriguez).
+- Docs: stress that alternate backends are supported via community extensions.
+- Docs: clarify that Redis is an optional dependency (Mateusz Łoskot).
+
+- Update license to 2017. Closes #955.
+- Update: Flask 0.12. Closes #945, #904 and #963.
+- Update: PyMongo 3.4 is now required. Closes #964.
 
 Version 0.6.4
 ~~~~~~~~~~~~~
 
+Released on 8 June, 2016
+
+- Fix: Cannot serialize data when a field that has a ``valueschema`` that is of
+  ``dict`` type. Closes #874.
+- Fix: Authorization header bearer tokens not parsed correctly. Closes #866
+  (James Stewart).
+- Fix: TokenAuth prevents base64 decoding of Tokens. Closes #840.
 - Fix: If datasource source is specified no fields are included by default.
   Closes #842.
 
+- Docs: streamline Quickstart guide. Closes #868.
+- Docs: fix broken link in Installation page. Closes #861.
 - Docs: Resource configuration doesn't mention ``versioning`` override. Closes
   #845.
-
-
-Stable
-------
 
 Version 0.6.3
 ~~~~~~~~~~~~~
@@ -154,9 +629,9 @@ Released on 29 October, 2015
 
 - Dev: fix rate limiting tests so they don't occasionally fail.
 - Dev: make sure connections opened by test suite are properly closed on
-  teardown. 
+  teardown.
 - Dev: use middleware to parse overrides and eventually update request method
-  (Julian Hille). 
+  (Julian Hille).
 - Dev: optimize versioning by building specific versions without deepcopying
   the root document (Nick Park).
 - Dev: ``_client_projection`` method has been moved up from the mongo layer to
@@ -187,7 +662,7 @@ Released on 28 September, 2015
   name, at the Eve homepage (suggested value ``_info``). The info section will
   include Eve server version and API version (API_VERSION, if set).  ``None``
   otherwise, if you do not want to expose any server info. Defaults to ``None``
-  (Stratos Gerakakis). 
+  (Stratos Gerakakis).
 - New: ``id_field`` sets a field used to uniquely identify resource items
   within the database. Locally overrides ``ID_FIELD`` (Dominik Kellner).
 - New: ``UPSERT_ON_PUT`` allows document creation on PUT if the document does
@@ -240,7 +715,7 @@ Released on 28 September, 2015
   endpoint. If URRA is not active on the endpoint, this rule behaves like
   ``unique``. Closes #646.
 - New: ``MEDIA_BASE_URL`` allows to set a custom base URL to be used when
-  ``RETURN_MEDIA_AS_URL`` is active (Henrique Barroso).  
+  ``RETURN_MEDIA_AS_URL`` is active (Henrique Barroso).
 - New: ``SOFT_DELETE`` enables soft deletes when set to ``True`` (Nick Park.)
 - New: ``mongo_indexes`` allows for creation of MongoDB indexes at application
   launch (Pau Freixes.)
@@ -251,9 +726,9 @@ Released on 28 September, 2015
 - New: Support for dot notation in POST, PATCH and PUT methods. Be aware that,
   for PATCH and PUT, if dot notation is used even on just one field, the whole
   sub-document will be replaced. So if this document is stored:
-  
+
   ``{"name": "john", "location": {"city": "New York", "address": "address"}}``
-  
+
   A PATCH like this:
 
     ``{"location.city": "Boston"}``
@@ -263,11 +738,11 @@ Released on 28 September, 2015
     ``{"location": {"city": "a nested city"}}``
 
   Will update the document to:
-  
+
   ``{"name": "john", "location": {"city": "Boston"}}``
 
 - New: JSONP Support (Tim Jacobi.)
-- New: Support for multiple MongoDB databases and/or servers. 
+- New: Support for multiple MongoDB databases and/or servers.
 
   - ``mongo_prefix`` resource setting allows overriding of the default
     ``MONGO`` prefix used when retrieving MongoDB settings from configuration.
@@ -293,7 +768,7 @@ Released on 28 September, 2015
   ``None`` (Olivier Carrère.)
 
 - Change: when HATEOAS is off the home endpoint will respond with ``200 OK``
-  instead of ``404 Not Found`` (Stratos Gerakakis). 
+  instead of ``404 Not Found`` (Stratos Gerakakis).
 - Change: PUT does not return ``404`` if a document URL does not exist. It will
   attempt to create the document instead. Set ``UPSET_ON_PUT`` to ``False`` to
   disable this behaviour and get a ``404`` instead.
@@ -325,7 +800,7 @@ Released on 28 September, 2015
 - Fix: Replace the Cerberus rule ``keyschema``, now deprecated, with the new
   ``propertyschema`` (Julian Hille).
 - Fix: some error message are not filtered out of debug mode anymore, as they
-  are useful for users and do not leak informations. Closes #671 (Sebastien
+  are useful for users and do not leak information. Closes #671 (Sebastien
   Estienne).
 - Fix: reinforce Content-Type Header handling to avoid possible crash when it
   is missing (Sebastien Estienne).
@@ -344,7 +819,7 @@ Released on 28 September, 2015
   document. For example, ``['a.b.c', 'a.b', 'a']`` (Gonéri Le Bouder).
 - Fix: add handling of sub-resource resolving for PUT method (Olivier Poitrey).
 - Fix: ``dependencies`` rule would mistakenly validate documents when target
-  fields happened to also have a ``default`` value. 
+  fields happened to also have a ``default`` value.
 - Fix: According to RFC2617 the separator should be (=) instead of (:). This
   caused at least Chrome not to prompt user for the credentials, and not to
   send the Authorization header even when credentials were in the url (Samuli
@@ -394,7 +869,7 @@ Released on 17 March, 2015.
 Version 0.5.2
 ~~~~~~~~~~~~~
 
-Released on 23 Feb, 2015. 
+Released on 23 Feb, 2015.
 Codename: 'Giulia'.
 
 - Fix: hardening of database concurrency checks. See #561 (Olivier Carrère.)
@@ -478,17 +953,17 @@ Released on 12 Jan, 2015.
 - New: Add extra 4xx response codes for proper handling. Only ``405`` Method
   not allowed, ``406`` Not acceptable, ``409`` Conflict, and ``410`` Gone have
   been added to the list (Kurt Doherty).
-- New: Add serializers for integer and float types (Grisha K.) 
+- New: Add serializers for integer and float types (Grisha K.)
 - New: dev-requirements.txt added to the repo.
 - New: Embedding of documents by references located in any subdocuments. For
   example, query ``embedded={"user.friends":1}`` will return a document with
   "user" and all his "friends" embedded, but only if ``user`` is a subdocument
   and ``friends`` is a list of references (Dmitry Anoshin).
-- New: Allow mongoengine to work properly with cursor counts (Johan Bloemberg) 
+- New: Allow mongoengine to work properly with cursor counts (Johan Bloemberg)
 - New: ``ALLOW_UNKNOWN`` allows unknown fields to be read, not only written as
   before. Closes #397 and #250.
 - New: ``VALIDATION_ERROR_STATUS`` allows setting of the HTTP status code to
-  use for validation errors. Defaults to ``422`` (Olivier Poitrey). 
+  use for validation errors. Defaults to ``422`` (Olivier Poitrey).
 - New: Support for sub-document projections. Fixes #182 (Olivier Poitrey).
 - New: Return ``409 Conflict`` on pymongo ``DuplicateKeyError`` for ``POST``
   requests, as already happens with ``PUT`` requests (Matt Creenan, #537.)
@@ -529,7 +1004,7 @@ Released on 12 Jan, 2015.
   #534).
 - Fix: Fix impossible version ranges in setup.py (Marcus Cobden, #531.)
 - Fix: Bug with expanding lists of roles, compromising authorization (Mikael
-  Berg, #527) 
+  Berg, #527)
 - Fix: ``PATCH`` on subdocument fields does not overwrite the whole
   subdocument anymore. Closes #519.
 - Fix: Added support for validation on field attribute with type list (Jorge
@@ -574,7 +1049,7 @@ Released on 12 Jan, 2015.
   Magrí).
 - Fix: KeyError when trying to use embedding on a field that is missing from
   document. It was fixed earlier in #319, but came back again after new
-  embedding mechanism (Daniel Lytkin). 
+  embedding mechanism (Daniel Lytkin).
 - Fix: Support for list of strings as default value for fields (hansotronic).
 - Fix: Media fields are now properly returned even in embedded documents.
   Closes #305.
@@ -590,7 +1065,7 @@ Released on 12 Jan, 2015.
   them into consideration when validating a query string. Closes #388.
 - Fix: Abort with 400 if unsupported query operators are used. Closes #387.
 - Fix: Return the error if a blacklisted MongoDB operator is used in a query
-  (debug mode). 
+  (debug mode).
 - Fix: Invalid sort syntax raises 500 instead of 400. Addresses #378.
 - Fix: Fix serialization when `type` is missing in schema. #404 (Jaroslav
   Semančík).
@@ -599,11 +1074,11 @@ Released on 12 Jan, 2015.
 - Fix: ``test_get_sort_disabled`` occasional failure.
 - Fix: A POST with an empty array leads to a server crash. Now returns a 400
   error isntead and ensure the server won't crash in case of mongo invalid
-  operations (Olivier Poitrey). 
+  operations (Olivier Poitrey).
 - Fix: PATCH and PUT don't respect flask.abort() in a pre-update event. Closes
   #395 (Christopher Larsen).
 - Fix: Validating keyschema rules would cause a TypeError since 0.4. Closes
-  nicolaiarocci/cerberus#48.
+  pyeve/cerberus#48.
 - Fix: Crash if client projection is not a dict #390 (Olivier Poitrey).
 - Fix: Server crash in case of invalid "where" syntax #386 (Olivier Poitrey).
 
@@ -632,13 +1107,13 @@ Released on 20 June, 2014.
 - [new] ``ALLOWED_WRITE_ROLES``. A list of allowed `roles` for resource
   endpoints with POST, PUT and DELETE methods (Olivier Poitrey).
 - [new] ``ALLOWED_ITEM_READ_ROLES``. A list of allowed `roles` for item
-  endpoints with GET and OPTIONS methods (Olivier Poitrey). 
+  endpoints with GET and OPTIONS methods (Olivier Poitrey).
 - [new] ``ALLOWED_ITEM_WRITE_ROLES``. A list of allowed `roles` for item
-  endpoints with PUT, PATCH and DELETE methods (Olivier Poitrey). 
+  endpoints with PUT, PATCH and DELETE methods (Olivier Poitrey).
 - [new] 'dependencies' validation rule.
 - [new] 'keyschema' validation rule.
 - [new] 'regex' validation rule.
-- [new] 'set' as a core data type. 
+- [new] 'set' as a core data type.
 - [new] 'min' and 'max' now apply to floats and numbers too.
 - [new] File Storage. ``EXTENDED_MEDIA_INFO`` allows a list of meta fields
   (file properties) to forward from the file upload driver (Ben Demaree).
@@ -646,7 +1121,7 @@ Released on 20 June, 2014.
 - [new] Support for default values in documents with more than one level of
   data (Javier Gonel).
 - [new] Ability to send entire document in write responses. ``BANDWITH_SAVER``
-  aka Coherence Mode (Josh Villbrandt). 
+  aka Coherence Mode (Josh Villbrandt).
 - [new] ``on_pre_<METHOD>`` events expose the `lookup` dictionary which allows
   for setting up dynamic database lookups on both resource and item endpoints.
 - [new] Return a 400 response on pymongo DuplicateKeyError, with exception
@@ -699,7 +1174,7 @@ Released on 20 June, 2014.
   ``auth_field`` value for the current request.
 - [change] ``on_update(ed)`` and ``on_replace(ed)`` callbacks now receive both
   the original document and the updates (Jaroslav Semančík).
-- [change] Review event names (Javier Gonel). 
+- [change] Review event names (Javier Gonel).
 
 - [fix] return 500 instead of 404 if CORS is enabled. Closes #381.
 - [fix] Crash on GET requests on resource endpoints when ID_FIELD is missing on
@@ -727,11 +1202,11 @@ Released on 20 June, 2014.
   (Alexander Hendorf).
 - [fix] ``If-Modified-Since`` misbehaviour when a datasource filter is set.
   Closes #258.
-- [fix] Trouble serializing list of dicts. Closes #265 and #244. 
+- [fix] Trouble serializing list of dicts. Closes #265 and #244.
 - [fix] ``HATEOAS`` item links are now coherent actual endpoint URL even when
   natural immutable keys are used in URLs (Junior Vidotti). Closes #256.
 - [fix] Replaced ``ID_FIELD`` by ``item_lookup_field`` on self link.
-  item_lookup_field will default to ``ID_FIELD`` if blank. 
+  item_lookup_field will default to ``ID_FIELD`` if blank.
 
 Version 0.3
 ~~~~~~~~~~~
@@ -758,7 +1233,7 @@ Released on 14 February, 2014.
 - [new] media files (images, pdf, etc.) can be uploaded as ``media`` document
   fields. When a document is requested, eventual media files will be returned
   as Base64 strings. Upload is done via ``POST``, ``PUT`` and ``PATCH`` using
-  the ``multipart/data-form`` content-type. For optmized performance, by
+  the ``multipart/form-data`` content-type. For optmized performance, by
   default files are stored in GridFS, however custom ``MediaStorage`` classes
   can be provided to support alternative storage systems. Clients and API
   maintainers can exploit the projections feature to include/exclude media
@@ -836,7 +1311,7 @@ Released on 30 November, 2013.
   inject proprietary data into the response stream (Petr Jašek).
 - [new] ``IF_MATCH`` allows to disable checks for ETag matches on edit, replace
   and delete requests. If disabled, requests without an If-Match header will be
-  honored without returning a 403 error. Defaults to True (enabled by default). 
+  honored without returning a 403 error. Defaults to True (enabled by default).
 - [new] ``LINKS`` allows to customize the links field. Default to '_links'.
 - [new] ``ITEMS`` allows to customize the items field. Default to '_items'.
 - [new] ``STATUS`` allows to customize the status field. Default to 'status'.
@@ -845,7 +1320,7 @@ Released on 30 November, 2013.
 - [new] A new ``json_encoder`` initialization argument is available. It allows
   to pass custom JSONEncoder or eve.io.BaseJSONEncoder to the Eve instance.
 - [new] A new ``url_converters`` initialization argument is available. It
-  allows to pass custom Flask url converters to the Eve constructor. 
+  allows to pass custom Flask url converters to the Eve constructor.
 - [new] ID_FIELD fields can now be of arbitrary types, not only ObjectIds.
   Thanks to Kelvin Hammond for contributing to this one.  Closes #136.
 - [new] ``pre_<method>`` and ``pre_<method>_<resource>`` event hooks are now
@@ -875,7 +1350,7 @@ Released on 30 November, 2013.
 - [change] JSON encoding is now handled at the DataLayer level allowing for
   specialized, granular, data-aware encoding. Also, since the JSON encoder is
   now a class attribute, extensions can replace the pre-defined data layer
-  encoder with their own implementation. Closes #102. 
+  encoder with their own implementation. Closes #102.
 - [fix] HMAC example and docs updated to align with new hmac in Python 2.7.3,
   which is only accepting bytes string. Closes #199.
 - [fix] Properly escape leaf values in XML responses (Florian Rathgeber).

@@ -6,27 +6,41 @@
 
     Utility functions for API methods implementations.
 
-    :copyright: (c) 2016 by Nicola Iarocci.
+    :copyright: (c) 2017 by Nicola Iarocci.
     :license: BSD, see LICENSE for more details.
 """
-import time
-from datetime import datetime
-
 import base64
-import simplejson as json
-from bson.errors import InvalidId
-from bson.dbref import DBRef
+import time
 from copy import copy
-from flask import current_app as app, request, abort, g, Response
+from datetime import datetime
 from functools import wraps
 
-from eve.utils import parse_request, document_etag, config, \
-    debug_error_message, auto_fields
-from eve.versioning import resolve_document_version, \
-    get_data_version_relation_document
+import simplejson as json
+from bson.dbref import DBRef
+from bson.errors import InvalidId
+from cerberus import schema_registry, rules_set_registry
+from flask import Response, abort, current_app as app, g, request
+from werkzeug.datastructures import MultiDict, CombinedMultiDict
+
+from eve.utils import (
+    auto_fields,
+    config,
+    debug_error_message,
+    document_etag,
+    parse_request,
+)
+from eve.versioning import get_data_version_relation_document, resolve_document_version
+from collections import Counter
 
 
-def get_document(resource, concurrency_check, **lookup):
+def get_document(
+    resource,
+    concurrency_check,
+    original=None,
+    check_auth_value=True,
+    force_auth_field_projection=False,
+    **lookup
+):
     """ Retrieves and return a single document. Since this function is used by
     the editing methods (PUT, PATCH, DELETE), we make sure that the client
     request references the current representation of the document before
@@ -36,6 +50,15 @@ def get_document(resource, concurrency_check, **lookup):
 
     :param resource: the name of the resource to which the document belongs to.
     :param concurrency_check: boolean check for concurrency control
+    :param original: in case the document was already retrieved before
+    :param check_auth_value: a boolean flag indicating if the find operation
+                             should consider user-restricted resource
+                             access. Defaults to ``True``.
+    :param force_auth_field_projection: a boolean flag indicating if the
+                                        find operation should always include
+                                        the user-restricted resource access
+                                        field (if configured). Defaults to
+                                        ``False``.
     :param **lookup: document lookup query
 
     .. versionchanged:: 0.6
@@ -53,18 +76,31 @@ def get_document(resource, concurrency_check, **lookup):
       processing of new configuration settings: `filters`, `sorting`, `paging`.
     """
     req = parse_request(resource)
-    if config.DOMAIN[resource]['soft_delete']:
+    if config.DOMAIN[resource]["soft_delete"]:
         # get_document should always fetch soft deleted documents from the db
         # callers must handle soft deleted documents
         req.show_deleted = True
 
-    document = app.data.find_one(resource, req, **lookup)
+    if original:
+        document = original
+    else:
+        document = app.data.find_one(
+            resource, req, check_auth_value, force_auth_field_projection, **lookup
+        )
+
     if document:
-        if not req.if_match and config.IF_MATCH and concurrency_check:
+        e_if_m = config.ENFORCE_IF_MATCH
+        if_m = config.IF_MATCH
+        if not req.if_match and e_if_m and if_m and concurrency_check:
             # we don't allow editing unless the client provides an etag
-            # for the document
-            abort(428, description='To edit a document '
-                  'its etag must be provided using the If-Match header')
+            # for the document or explicitly decides to allow editing by either
+            # disabling the ``concurrency_check`` or ``IF_MATCH`` or
+            # ``ENFORCE_IF_MATCH`` fields.
+            abort(
+                428,
+                description="To edit a document "
+                "its etag must be provided using the If-Match header",
+            )
 
         # ensure the retrieved document has LAST_UPDATED and DATE_CREATED,
         # eventually with same default values as in GET.
@@ -72,13 +108,14 @@ def get_document(resource, concurrency_check, **lookup):
         document[config.DATE_CREATED] = date_created(document)
 
         if req.if_match and concurrency_check:
-            ignore_fields = config.DOMAIN[resource]['etag_ignore_fields']
-            etag = document.get(config.ETAG, document_etag(document,
-                                ignore_fields=ignore_fields))
+            ignore_fields = config.DOMAIN[resource]["etag_ignore_fields"]
+            etag = document.get(
+                config.ETAG, document_etag(document, ignore_fields=ignore_fields)
+            )
             if req.if_match != etag:
                 # client and server etags must match, or we don't allow editing
                 # (ensures that client's version of the document is up to date)
-                abort(412, description='Client and server etags don\'t match')
+                abort(412, description="Client and server etags don't match")
 
     return document
 
@@ -148,14 +185,17 @@ def payload():
 
     .. versionadded: 0.0.5
     """
-    content_type = request.headers.get('Content-Type', '').split(';')[0]
+    content_type = request.headers.get("Content-Type", "").split(";")[0]
 
-    if content_type == 'application/json':
-        return request.get_json()
-    elif content_type == 'application/x-www-form-urlencoded':
-        return request.form.to_dict() if len(request.form) else \
-            abort(400, description='No form-urlencoded data supplied')
-    elif content_type == 'multipart/form-data':
+    if content_type in config.JSON_REQUEST_CONTENT_TYPES:
+        return request.get_json(force=True)
+    elif content_type == "application/x-www-form-urlencoded":
+        return (
+            multidict_to_dict(request.form)
+            if len(request.form)
+            else abort(400, description="No form-urlencoded data supplied")
+        )
+    elif content_type == "multipart/form-data":
         # as multipart is also used for file uploads, we let an empty
         # request.form go through as long as there are also files in the
         # request.
@@ -163,29 +203,40 @@ def payload():
             # merge form fields and request files, so we get a single payload
             # to be validated against the resource schema.
 
+            formItems = MultiDict(request.form)
+
             if config.MULTIPART_FORM_FIELDS_AS_JSON:
+                for key, lst in formItems.lists():
+                    new_lst = []
+                    for value in lst:
+                        try:
+                            new_lst.append(json.loads(value))
+                        except ValueError:
+                            new_lst.append(json.loads('"{0}"'.format(value)))
+                    formItems.setlist(key, new_lst)
 
-                formItems = dict(list(request.form.to_dict().items()))
-
-                for key in formItems.keys():
-                    try:
-                        formItems[key] = json.loads(formItems[key])
-                    except ValueError:
-                        formItems[key] = json.loads(
-                            '"{0}"'.format(formItems[key]))
-
-                return dict(list(formItems.items()) +
-                            list(request.files.to_dict().items()))
-            else:
-                # list() is needed because Python3 items() returns a
-                # dict_view, not a list as in Python2.
-                return dict(list(request.form.to_dict().items()) +
-                            list(request.files.to_dict().items()))
+            payload = CombinedMultiDict([formItems, request.files])
+            return multidict_to_dict(payload)
 
         else:
-            abort(400, description='No multipart/form-data supplied')
+            abort(400, description="No multipart/form-data supplied")
     else:
-        abort(400, description='Unknown or no Content-Type header supplied')
+        abort(400, description="Unknown or no Content-Type header supplied")
+
+
+def multidict_to_dict(multidict):
+    """ Convert a MultiDict containing form data into a regular dict. If the
+    config setting AUTO_COLLAPSE_MULTI_KEYS is True, multiple values with the
+    same key get entered as a list. If it is False, the first entry is picked.
+    """
+    if config.AUTO_COLLAPSE_MULTI_KEYS:
+        d = dict(multidict.lists())
+        for key, value in d.items():
+            if len(value) == 1:
+                d[key] = value[0]
+        return d
+    else:
+        return multidict.to_dict()
 
 
 class RateLimit(object):
@@ -199,6 +250,7 @@ class RateLimit(object):
 
     .. versionadded:: 0.0.7
     """
+
     # Maybe has something complicated problems.
 
     def __init__(self, key, limit, period, send_x_headers=True):
@@ -222,7 +274,7 @@ def get_rate_limit():
 
     .. versionadded:: 0.0.7
     """
-    return getattr(g, '_rate_limit', None)
+    return getattr(g, "_rate_limit", None)
 
 
 def ratelimit():
@@ -239,28 +291,33 @@ def ratelimit():
 
     .. versionadded:: 0.0.7
     """
+
     def decorator(f):
         @wraps(f)
         def rate_limited(*args, **kwargs):
-            method_limit = app.config.get('RATE_LIMIT_' + request.method)
+            method_limit = app.config.get("RATE_LIMIT_" + request.method)
             if method_limit and app.redis:
                 limit = method_limit[0]
                 period = method_limit[1]
                 # If authorization is being used the key is 'username'.
                 # Else, fallback to client IP.
-                key = 'rate-limit/%s' % (request.authorization.username
-                                         if request.authorization else
-                                         request.remote_addr)
+                key = "rate-limit/%s" % (
+                    request.authorization.username
+                    if request.authorization
+                    else request.remote_addr
+                )
                 rlimit = RateLimit(key, limit, period, True)
                 if rlimit.over_limit:
-                    return Response('Rate limit exceeded', 429)
+                    return Response("Rate limit exceeded", 429)
                 # store the rate limit for further processing by
                 # send_response
                 g._rate_limit = rlimit
             else:
                 g._rate_limit = None
             return f(*args, **kwargs)
+
         return rate_limited
+
     return decorator
 
 
@@ -301,8 +358,7 @@ def date_created(document):
 
     .. versionadded:: 0.0.5
     """
-    return document[config.DATE_CREATED] if config.DATE_CREATED in document \
-        else epoch()
+    return document[config.DATE_CREATED] if config.DATE_CREATED in document else epoch()
 
 
 def epoch():
@@ -320,6 +376,12 @@ def epoch():
 def serialize(document, resource=None, schema=None, fields=None):
     """ Recursively handles field values that require data-aware serialization.
     Relies on the app.data.serializers dictionary.
+
+    .. versionchanged: 0.8.1
+       Normalize dotted fields according to normalized_dotted_fields. See #1173.
+
+    .. versionchanged:: 0.7
+       Add support for normalizing anyof-like rules inside lists. See #876.
 
     .. versionchanged:: 0.6
        Add support for normalizing dotted fields.
@@ -340,11 +402,18 @@ def serialize(document, resource=None, schema=None, fields=None):
     .. versionadded:: 0.1.1
     """
 
-    normalize_dotted_fields(document)
+    def resolve_schema(schema):
+        return schema if isinstance(schema, dict) else schema_registry.get(schema)
+
+    if (
+        resource not in config.DOMAIN
+        or config.DOMAIN[resource]["normalize_dotted_fields"]
+    ):
+        normalize_dotted_fields(document)
 
     if app.data.serializers:
         if resource:
-            schema = config.DOMAIN[resource]['schema']
+            schema = resolve_schema(config.DOMAIN[resource]["schema"])
         if not fields:
             fields = document.keys()
         for field in fields:
@@ -352,71 +421,118 @@ def serialize(document, resource=None, schema=None, fields=None):
                 continue
             if field in schema:
                 field_schema = schema[field]
-                field_type = field_schema.get('type')
-                if field_type is None:
-                    for x_of in ['allof', 'anyof', 'oneof', 'noneof']:
+                if not isinstance(field_schema, dict):
+                    field_schema = rules_set_registry.get(field_schema)
+                field_types = field_schema.get("type")
+                if not isinstance(field_types, list):
+                    field_types = [field_types]
+                for field_type in field_types:
+                    for x_of in ["allof", "anyof", "oneof", "noneof"]:
                         for optschema in field_schema.get(x_of, []):
-                            schema = {field: optschema}
-                            serialize(document, schema=schema)
-                        x_of_type = '{0}_type'.format(x_of)
+                            optschema = dict(field_schema, **optschema)
+                            optschema.pop(x_of, None)
+                            serialize(document, schema={field: optschema})
+                        x_of_type = "{0}_type".format(x_of)
                         for opttype in field_schema.get(x_of_type, []):
-                            schema = {field: {'type': opttype}}
-                            serialize(document, schema=schema)
-                if 'schema' in field_schema:
-                    field_schema = field_schema['schema']
-                    if 'dict' in (field_type, field_schema.get('type')):
-                        # either a dict or a list of dicts
-                        embedded = [document[field]] if field_type == 'dict' \
-                            else document[field]
-                        for subdocument in embedded:
-                            if type(subdocument) is not dict:
-                                # value is not a dict - continue serialization
-                                # error will be reported by validation if
-                                # appropriate
-                                continue
-                            elif 'schema' in field_schema:
-                                serialize(subdocument,
-                                          schema=field_schema['schema'])
-                            else:
-                                serialize(subdocument, schema=field_schema)
-                    elif field_schema.get('type') == 'list':
-                        # a list of lists
-                        sublist_schema = field_schema.get('schema')
-                        item_type = sublist_schema.get('type')
-                        for sublist in document[field]:
-                            for i, v in enumerate(sublist):
-                                if item_type == 'dict':
-                                    serialize(sublist[i],
-                                              schema=sublist_schema['schema'])
-                                elif item_type in app.data.serializers:
-                                    sublist[i] = serialize_value(item_type, v)
-                    else:
-                        # a list of one type, arbitrary length
-                        field_type = field_schema.get('type')
-                        if field_type in app.data.serializers:
-                            for i, v in enumerate(document[field]):
-                                document[field][i] = \
-                                    serialize_value(field_type, v)
-                elif 'items' in field_schema:
-                    # a list of multiple types, fixed length
-                    for i, (s, v) in enumerate(zip(field_schema['items'],
-                                                   document[field])):
-                        field_type = s.get('type')
-                        if field_type in app.data.serializers:
-                            document[field][i] = \
-                                serialize_value(field_type, document[field][i])
-                elif 'valueschema' in field_schema:
-                    # a valueschema
-                    field_type = field_schema['valueschema']['type']
-                    if field_type == 'objectid':
-                        target = document[field]
-                        for field in target:
-                            target[field] = \
-                                serialize_value(field_type, target[field])
-                elif field_type in app.data.serializers:
-                    # a simple field
-                    document[field] = \
-                        serialize_value(field_type, document[field])
+                            optschema = dict(field_schema, type=opttype)
+                            optschema.pop(x_of_type, None)
+                            serialize(document, schema={field: optschema})
+                    if config.AUTO_CREATE_LISTS and field_type == "list":
+                        # Convert single values to lists
+                        if not isinstance(document[field], list):
+                            document[field] = [document[field]]
+                    if "schema" in field_schema:
+                        field_schema = resolve_schema(field_schema["schema"])
+                        if "dict" in (field_type, field_schema.get("type")):
+                            # either a dict or a list of dicts
+                            embedded = (
+                                [document[field]]
+                                if field_type == "dict"
+                                else document[field]
+                            )
+                            for subdocument in embedded:
+                                if type(subdocument) is not dict:
+                                    # value is not a dict - continue
+                                    # serialization error will be reported by
+                                    # validation if appropriate
+                                    continue
+                                elif "schema" in field_schema:
+                                    serialize(
+                                        subdocument, schema=field_schema["schema"]
+                                    )
+                                else:
+                                    serialize(subdocument, schema=field_schema)
+                        elif field_schema.get("type") == "list":
+                            # a list of lists
+                            sublist_schema = resolve_schema(field_schema.get("schema"))
+                            item_type = sublist_schema.get("type")
+                            for sublist in document[field]:
+                                for i, v in enumerate(sublist):
+                                    if item_type == "dict":
+                                        serialize(
+                                            sublist[i], schema=sublist_schema["schema"]
+                                        )
+                                    elif item_type in app.data.serializers:
+                                        sublist[i] = serialize_value(item_type, v)
+                        elif field_schema.get("type") is None:
+                            # a list of items determined by *of rules
+                            for x_of in ["allof", "anyof", "oneof", "noneof"]:
+                                for optschema in field_schema.get(x_of, []):
+                                    serialize(
+                                        document,
+                                        schema={
+                                            field: {
+                                                "type": field_type,
+                                                "schema": optschema,
+                                            }
+                                        },
+                                    )
+                                x_of_type = "{0}_type".format(x_of)
+                                for opttype in field_schema.get(x_of_type, []):
+                                    serialize(
+                                        document,
+                                        schema={
+                                            field: {
+                                                "type": field_type,
+                                                "schema": {"type": opttype},
+                                            }
+                                        },
+                                    )
+                        else:
+                            # a list of one type, arbitrary length
+                            field_type = field_schema.get("type")
+                            if field_type in app.data.serializers:
+                                for i, v in enumerate(document[field]):
+                                    document[field][i] = serialize_value(field_type, v)
+                    elif "items" in field_schema:
+                        # a list of multiple types, fixed length
+                        for i, (s, v) in enumerate(
+                            zip(field_schema["items"], document[field])
+                        ):
+                            field_type = s.get("type")
+                            if field_type in app.data.serializers:
+                                document[field][i] = serialize_value(
+                                    field_type, document[field][i]
+                                )
+                    elif "valueschema" in field_schema:
+                        # a valueschema
+                        field_type = field_schema["valueschema"]["type"]
+                        if field_type == "objectid":
+                            target = document[field]
+                            for field in target:
+                                target[field] = serialize_value(
+                                    field_type, target[field]
+                                )
+                        elif field_type == "dict":
+                            for subdocument in document[field].values():
+                                serialize(
+                                    subdocument,
+                                    schema=field_schema["valueschema"]["schema"],
+                                )
+
+                    elif field_type in app.data.serializers:
+                        # a simple field
+                        document[field] = serialize_value(field_type, document[field])
 
     return document
 
@@ -437,7 +553,7 @@ def normalize_dotted_fields(document):
     """ Normalizes eventual dotted fields so validation can be performed
     seamlessly. For example this document:
 
-        {"location.city": "a nested cisty"}
+        {"location.city": "a nested city"}
 
     would be normalized to:
 
@@ -463,8 +579,8 @@ def normalize_dotted_fields(document):
             normalize_dotted_fields(i)
     elif isinstance(document, dict):
         for field in list(document):
-            if '.' in field:
-                parts = field.split('.')
+            if "." in field:
+                parts = field.split(".")
                 prev = document
                 for part in parts[:-1]:
                     if part not in prev:
@@ -478,8 +594,7 @@ def normalize_dotted_fields(document):
                 normalize_dotted_fields(document[field])
 
 
-def build_response_document(
-        document, resource, embedded_fields, latest_doc=None):
+def build_response_document(document, resource, embedded_fields, latest_doc=None):
     """ Prepares a document for response including generation of ETag and
     metadata fields.
 
@@ -504,33 +619,33 @@ def build_response_document(
 
     # Up to v0.4 etags were not stored with the documents.
     if config.IF_MATCH and config.ETAG not in document:
-        ignore_fields = resource_def['etag_ignore_fields']
-        document[config.ETAG] = document_etag(document,
-                                              ignore_fields=ignore_fields)
+        ignore_fields = resource_def["etag_ignore_fields"]
+        document[config.ETAG] = document_etag(document, ignore_fields=ignore_fields)
 
     # hateoas links
-    if resource_def['hateoas'] and resource_def['id_field'] in document:
+    if resource_def["hateoas"] and resource_def["id_field"] in document:
         version = None
-        if resource_def['versioning'] is True \
-                and request.args.get(config.VERSION_PARAM):
+        if resource_def["versioning"] is True and request.args.get(
+            config.VERSION_PARAM
+        ):
             version = document[config.VERSION]
 
-        self_dict = {'self': document_link(resource,
-                                           document[resource_def['id_field']],
-                                           version)}
+        self_dict = {
+            "self": document_link(resource, document[resource_def["id_field"]], version)
+        }
         if config.LINKS not in document:
             document[config.LINKS] = self_dict
-        elif 'self' not in document[config.LINKS]:
+        elif "self" not in document[config.LINKS]:
             document[config.LINKS].update(self_dict)
 
     # add version numbers
-    resolve_document_version(document, resource, 'GET', latest_doc)
+    resolve_document_version(document, resource, "GET", latest_doc)
 
     # resolve media
     resolve_media_files(document, resource)
 
     # resolve soft delete
-    if resource_def['soft_delete'] is True:
+    if resource_def["soft_delete"] is True:
         if document.get(config.DELETED) is None:
             document[config.DELETED] = False
         elif document[config.DELETED] is True:
@@ -553,21 +668,21 @@ def field_definition(resource, chained_fields):
     .. versionadded 0.5
     """
     definition = config.DOMAIN[resource]
-    subfields = chained_fields.split('.')
+    subfields = chained_fields.split(".")
 
     for field in subfields:
-        if field not in definition.get('schema', {}):
-            if 'data_relation' in definition:
-                sub_resource = definition['data_relation']['resource']
+        if field not in definition.get("schema", {}):
+            if "data_relation" in definition:
+                sub_resource = definition["data_relation"]["resource"]
                 definition = config.DOMAIN[sub_resource]
 
-        if field not in definition['schema']:
+        if field not in definition["schema"]:
             return
-        definition = definition['schema'][field]
-        field_type = definition.get('type')
-        if field_type == 'list':
-            definition = definition['schema']
-        elif field_type == 'objectid':
+        definition = definition["schema"][field]
+        field_type = definition.get("type")
+        if field_type == "list":
+            definition = definition["schema"]
+        elif field_type == "objectid":
             pass
     return definition
 
@@ -592,40 +707,40 @@ def resolve_embedded_fields(resource, req):
         try:
             client_embedding = json.loads(req.embedded)
         except ValueError:
-            abort(400, description='Unable to parse `embedded` clause')
+            abort(400, description="Unable to parse `embedded` clause")
 
         # Build the list of fields where embedding is being requested
         try:
-            embedded_fields = [k for k, v in client_embedding.items()
-                               if v == 1]
-            non_embedded_fields = [k for k, v in client_embedding.items()
-                                   if v == 0]
+            embedded_fields = [k for k, v in client_embedding.items() if v == 1]
+            non_embedded_fields = [k for k, v in client_embedding.items() if v == 0]
         except AttributeError:
             # We got something other than a dict
-            abort(400, description='Unable to parse `embedded` clause')
+            abort(400, description="Unable to parse `embedded` clause")
 
     embedded_fields = list(
-        (set(config.DOMAIN[resource]['embedded_fields']) |
-         set(embedded_fields)) - set(non_embedded_fields))
+        (set(config.DOMAIN[resource]["embedded_fields"]) | set(embedded_fields))
+        - set(non_embedded_fields)
+    )
 
     # For each field, is the field allowed to be embedded?
     # Pick out fields that have a `data_relation` where `embeddable=True`
     enabled_embedded_fields = []
-    for field in sorted(embedded_fields, key=lambda a: a.count('.')):
+    for field in sorted(embedded_fields, key=lambda a: a.count(".")):
         # Reject bogus field names
         field_def = field_definition(resource, field)
         if field_def:
-            if field_def.get('type') == 'list':
-                field_def = field_def['schema']
-            if 'data_relation' in field_def and \
-                    field_def['data_relation'].get('embeddable'):
+            if field_def.get("type") == "list":
+                field_def = field_def["schema"]
+            if "data_relation" in field_def and field_def["data_relation"].get(
+                "embeddable"
+            ):
                 # or could raise 400 here
                 enabled_embedded_fields.append(field)
 
     return enabled_embedded_fields
 
 
-def embedded_document(reference, data_relation, field_name):
+def embedded_document(references, data_relation, field_name):
     """ Returns a document to be embedded by reference using data_relation
     taking into account document versions
 
@@ -635,40 +750,178 @@ def embedded_document(reference, data_relation, field_name):
 
     .. versionadded:: 0.5
     """
+    embedded_docs = []
+
+    output_is_list = True
+
+    if not isinstance(references, list):
+        output_is_list = False
+        references = [references]
+
     # Retrieve and serialize the requested document
-    if 'version' in data_relation and data_relation['version'] is True:
-        # grab the specific version
-        embedded_doc = get_data_version_relation_document(
-            data_relation, reference)
+    if "version" in data_relation and data_relation["version"] is True:
+        # For the version flow, I keep the as-is logic (flow is too complex to
+        # make it bulk)
+        for reference in references:
+            # grab the specific version
+            embedded_doc = get_data_version_relation_document(data_relation, reference)
 
-        # grab the latest version
-        latest_embedded_doc = get_data_version_relation_document(
-            data_relation, reference, latest=True)
+            # grab the latest version
+            latest_embedded_doc = get_data_version_relation_document(
+                data_relation, reference, latest=True
+            )
 
-        # make sure we got the documents
-        if embedded_doc is None or latest_embedded_doc is None:
-            # your database is not consistent!!! that is bad
-            # TODO: we should notify the developers with a log.
-            abort(404, description=debug_error_message(
-                "Unable to locate embedded documents for '%s'" %
-                field_name
-            ))
+            # make sure we got the documents
+            if embedded_doc is None or latest_embedded_doc is None:
+                # your database is not consistent!!! that is bad
+                # TODO: we should notify the developers with a log.
+                abort(
+                    404,
+                    description=debug_error_message(
+                        "Unable to locate embedded documents for '%s'" % field_name
+                    ),
+                )
 
-        build_response_document(embedded_doc, data_relation['resource'],
-                                [], latest_embedded_doc)
+            build_response_document(
+                embedded_doc, data_relation["resource"], [], latest_embedded_doc
+            )
+            embedded_docs.append(embedded_doc)
     else:
-        # if reference is DBRef take the referenced collection as subresource
-        subresource = reference.collection if isinstance(reference, DBRef) \
-            else data_relation['resource']
-        id_field = config.DOMAIN[subresource]['id_field']
-        embedded_doc = app.data.find_one(subresource, None,
-                                         **{id_field: reference.id
-                                            if isinstance(reference, DBRef)
-                                            else reference})
-        if embedded_doc:
-            resolve_media_files(embedded_doc, subresource)
+        id_value_to_sort, list_of_id_field_name, subresources_query = generate_query_and_sorting_criteria(
+            data_relation, references
+        )
+        for subresource in subresources_query:
+            list_embedded_doc = list(
+                app.data.find(subresource, None, subresources_query[subresource])
+            )
 
-    return embedded_doc
+            if not list_embedded_doc:
+                embedded_docs.extend(
+                    [None] * len(subresources_query[subresource]["$or"])
+                )
+            else:
+                for embedded_doc in list_embedded_doc:
+                    resolve_media_files(embedded_doc, subresource)
+                embedded_docs.extend(list_embedded_doc)
+
+        # After having retrieved my data, I have to be sure that the sorting of
+        # the list is the same in input as in output (this is to support
+        # embedding of sub-documents - only in case the storage is not done via
+        # DBref)
+        if embedded_docs:
+            embedded_docs = sort_db_response(
+                embedded_docs, id_value_to_sort, list_of_id_field_name
+            )
+
+    if output_is_list:
+        return embedded_docs
+    elif embedded_docs:
+        return embedded_docs[0]
+    else:
+        return None
+
+
+def sort_db_response(embedded_docs, id_value_to_sort, list_of_id_field_name):
+    """ Sorts the documents fetched from the database
+
+        :param embedded_docs: the documents fetch from the database.
+        :param id_value_to_sort: id_value sort criteria.
+        :param list_of_id_field_name: list of name of fields
+        :return embedded_docs: the list of documents sorted as per input
+        """
+
+    id_field_name_occurrences = Counter(list_of_id_field_name)
+    temp_embedded_docs = []
+    old_occurrence = 0
+
+    for id_field_name in set(list_of_id_field_name):
+        current_occurrence = old_occurrence + int(
+            id_field_name_occurrences[id_field_name]
+        )
+        temp_embedded_docs.extend(
+            sort_per_resource(
+                embedded_docs[old_occurrence:current_occurrence],
+                id_value_to_sort,
+                id_field_name,
+            )
+        )
+        old_occurrence = current_occurrence
+
+    return temp_embedded_docs
+
+
+def sort_per_resource(embedded_docs, id_value_to_sort, id_field_name):
+    """ Sorts the documents fetched from the database per single resource
+
+        :param embedded_docs: the documents fetch from the database.
+        :param id_value_to_sort: id_value sort criteria.
+        :param list_of_id_field_name: list of name of fields
+        :return embedded_docs: the list of documents sorted as per input
+        """
+    # Removing None
+    number_of_none = embedded_docs.count(None)
+    if number_of_none:
+        embedded_docs = [x for x in embedded_docs if x is not None]
+    id2dict = dict((d[id_field_name], d) for d in embedded_docs)
+    temporary_embedded_docs = []
+    if number_of_none:
+        for id_value_ in id_value_to_sort:
+            if id_value_ in id2dict:
+                temporary_embedded_docs.append(id2dict[id_value_])
+            else:
+                temporary_embedded_docs.append(None)
+    return embedded_docs
+
+
+def generate_query_and_sorting_criteria(data_relation, references):
+    """ Generate query and sorting critiria
+
+        :param data_relation: data relation for the resource.
+        :param references: DBRef or id to use to embed the document.
+        :returns id_value_to_sort: list of ids to use in the sort
+                 list_of_id_field_name: list of field name (important only for
+                                        DBRef)
+                 subresources_query: the list of query to perform per resource
+                                     (in case is not DBRef, it will be only one
+                                     query)
+        """
+    query = {"$or": []}
+    subresources_query = {}
+    old_subresource = ""
+    id_value_to_sort = []
+    # id_field name should be the same for
+    # all the elements in the list
+    list_of_id_field_name = []
+    for counter, reference in enumerate(references):
+        # if reference is DBRef take the referenced collection as subresource
+        # NOTE: using DBRef, I can define several resource for each link
+        subresource = (
+            reference.collection
+            if isinstance(reference, DBRef)
+            else data_relation["resource"]
+        )
+        if old_subresource and old_subresource != subresource:
+            add_query_to_list(query, subresource, subresources_query)
+        # NOTE: in case it is a DBRef link, the id_field_name is always the _id
+        # regardless the Eve set-up
+        id_field_name = (
+            "_id"
+            if isinstance(reference, DBRef)
+            else config.DOMAIN[subresource]["id_field"]
+        )
+        id_field_value = reference.id if isinstance(reference, DBRef) else reference
+        query["$or"].append({id_field_name: id_field_value})
+        id_value_to_sort.append(id_field_value)
+        list_of_id_field_name.append(id_field_name)
+        if counter == len(references) - 1:
+            add_query_to_list(query, subresource, subresources_query)
+    return id_value_to_sort, list_of_id_field_name, subresources_query
+
+
+def add_query_to_list(query, subresource, subresource_query):
+    subresource_query.update({subresource: copy(query)})
+    query.clear()
+    query["$or"] = []
 
 
 def subdocuments(fields_chain, resource, document):
@@ -687,8 +940,9 @@ def subdocuments(fields_chain, resource, document):
         subdocument = document[fields_chain[0]]
         docs = subdocument if isinstance(subdocument, list) else [subdocument]
         try:
-            resource = field_definition(
-                resource, fields_chain[0])['data_relation']['resource']
+            resource = field_definition(resource, fields_chain[0])["data_relation"][
+                "resource"
+            ]
         except KeyError:
             resource = resource
 
@@ -715,36 +969,32 @@ def resolve_embedded_documents(document, resource, embedded_fields):
     :param resource: the resource name.
     :param embedded_fields: the list of fields we are allowed to embed.
 
-    .. versionchagend:: 0.5
+    .. versionchanged:: 0.5
        Support for embedding documents located in subdocuments.
        Allocated two functions embedded_document and subdocuments.
 
-    .. versionchagend:: 0.4
+    .. versionchanged:: 0.4
         Moved parsing of embedded fields to _resolve_embedded_fields.
         Support for document versioning.
 
-    .. versionchagend:: 0.2
+    .. versionchanged:: 0.2
         Support for 'embedded_fields'.
 
-    .. versonchanged:: 0.1.1
+    .. versionchanged:: 0.1.1
        'collection' key has been renamed to 'resource' (data_relation).
 
     .. versionadded:: 0.1.0
     """
     # NOTE(Gonéri): We resolve the embedded documents at the end.
-    for field in sorted(embedded_fields, key=lambda a: a.count('.')):
-        data_relation = field_definition(resource, field)['data_relation']
+    for field in sorted(embedded_fields, key=lambda a: a.count(".")):
+        data_relation = field_definition(resource, field)["data_relation"]
         getter = lambda ref: embedded_document(ref, data_relation, field)  # noqa
-        fields_chain = field.split('.')
+        fields_chain = field.split(".")
         last_field = fields_chain[-1]
         for subdocument in subdocuments(fields_chain[:-1], resource, document):
-            if last_field not in subdocument:
+            if not subdocument or last_field not in subdocument:
                 continue
-            if isinstance(subdocument[last_field], list):
-                subdocument[last_field] = list(map(getter,
-                                                   subdocument[last_field]))
-            else:
-                subdocument[last_field] = getter(subdocument[last_field])
+            subdocument[last_field] = getter(subdocument[last_field])
 
 
 def resolve_media_files(document, resource):
@@ -756,43 +1006,56 @@ def resolve_media_files(document, resource):
     .. versionadded:: 0.4
     """
     for field in resource_media_fields(document, resource):
-        file_id = document[field]
-        _file = app.media.get(file_id, resource)
-
-        if _file:
-            # otherwise we have a valid file and should send extended response
-            # start with the basic file object
-            if config.RETURN_MEDIA_AS_BASE64_STRING:
-                ret_file = base64.encodestring(_file.read())
-            elif config.RETURN_MEDIA_AS_URL:
-                prefix = config.MEDIA_BASE_URL if config.MEDIA_BASE_URL \
-                    is not None else app.api_prefix
-                ret_file = '%s/%s/%s' % (prefix, config.MEDIA_ENDPOINT,
-                                         file_id)
-            else:
-                ret_file = None
-
-            if config.EXTENDED_MEDIA_INFO:
-                document[field] = {
-                    'file': ret_file,
-                }
-
-                # check if we should return any special fields
-                for attribute in config.EXTENDED_MEDIA_INFO:
-                    if hasattr(_file, attribute):
-                        # add extended field if found in the file object
-                        document[field].update({
-                            attribute: getattr(_file, attribute)
-                        })
-                    else:
-                        # tried to select an invalid attribute
-                        abort(500, description=debug_error_message(
-                            'Invalid extended media attribute requested'
-                        ))
-            else:
-                document[field] = ret_file
+        if isinstance(document[field], list):
+            resolved_list = []
+            for file_id in document[field]:
+                resolved_list.append(resolve_one_media(file_id, resource))
+            document[field] = resolved_list
         else:
-            document[field] = None
+            document[field] = resolve_one_media(document[field], resource)
+
+
+def resolve_one_media(file_id, resource):
+    """ Get response for one media file """
+    _file = app.media.get(file_id, resource)
+
+    if _file:
+        # otherwise we have a valid file and should send extended response
+        # start with the basic file object
+        if config.RETURN_MEDIA_AS_BASE64_STRING:
+            ret_file = base64.encodestring(_file.read())
+        elif config.RETURN_MEDIA_AS_URL:
+            prefix = (
+                config.MEDIA_BASE_URL
+                if config.MEDIA_BASE_URL is not None
+                else app.api_prefix
+            )
+            ret_file = "%s/%s/%s" % (prefix, config.MEDIA_ENDPOINT, file_id)
+        else:
+            ret_file = None
+
+        if config.EXTENDED_MEDIA_INFO:
+            ret = {"file": ret_file}
+
+            # check if we should return any special fields
+            for attribute in config.EXTENDED_MEDIA_INFO:
+                if hasattr(_file, attribute):
+                    # add extended field if found in the file object
+                    ret.update({attribute: getattr(_file, attribute)})
+                else:
+                    # tried to select an invalid attribute
+                    abort(
+                        500,
+                        description=debug_error_message(
+                            "Invalid extended media attribute requested"
+                        ),
+                    )
+
+            return ret
+        else:
+            return ret_file
+    else:
+        return None
 
 
 def marshal_write_response(document, resource):
@@ -807,18 +1070,18 @@ def marshal_write_response(document, resource):
     .. versionadded:: 0.4
     """
 
-    resource_def = app.config['DOMAIN'][resource]
-    if app.config['BANDWIDTH_SAVER'] is True:
+    resource_def = app.config["DOMAIN"][resource]
+    if app.config["BANDWIDTH_SAVER"] is True:
         # only return the automatic fields and special extra fields
-        fields = auto_fields(resource) + resource_def['extra_response_fields']
+        fields = auto_fields(resource) + resource_def["extra_response_fields"]
         document = dict((k, v) for (k, v) in document.items() if k in fields)
     else:
         # avoid exposing the auth_field if it is not included in the
         # resource schema.
-        auth_field = resource_def.get('auth_field')
-        if auth_field and auth_field not in resource_def['schema']:
+        auth_field = resource_def.get("auth_field")
+        if auth_field and auth_field not in resource_def["schema"]:
             try:
-                del(document[auth_field])
+                del (document[auth_field])
             except:
                 # 'auth_field' value has not been set by the auth class.
                 pass
@@ -839,21 +1102,41 @@ def store_media_files(document, resource, original=None):
     .. versionadded:: 0.3
     """
     # TODO We're storing media files in advance, before the corresponding
-    # document is also stored. In the rare occurance that the subsequent
+    # document is also stored. In the rare occurrence that the subsequent
     # document update fails we should probably attempt a cleanup on the storage
-    # sytem. Easier said than done though.
+    # system. Easier said than done though.
     for field in resource_media_fields(document, resource):
         if original and field in original:
             # since file replacement is not supported by the media storage
-            # system, we first need to delete the file being replaced.
-            app.media.delete(original[field], resource)
+            # system, we first need to delete the files being replaced.
+            if isinstance(original[field], list):
+                for file_id in original[field]:
+                    app.media.delete(file_id, resource)
+            else:
+                app.media.delete(original[field], resource)
 
         if document[field]:
-            # store file and update document with file's unique id/filename
+            # store files and update document with file's unique id/filename
             # also pass in mimetype for use when retrieving the file
-            document[field] = app.media.put(
-                document[field], filename=document[field].filename,
-                content_type=document[field].mimetype, resource=resource)
+            if isinstance(document[field], list):
+                id_lst = []
+                for stor_obj in document[field]:
+                    id_lst.append(
+                        app.media.put(
+                            stor_obj,
+                            filename=stor_obj.filename,
+                            content_type=stor_obj.mimetype,
+                            resource=resource,
+                        )
+                    )
+                document[field] = id_lst
+            else:
+                document[field] = app.media.put(
+                    document[field],
+                    filename=document[field].filename,
+                    content_type=document[field].mimetype,
+                    resource=resource,
+                )
 
 
 def resource_media_fields(document, resource):
@@ -864,7 +1147,7 @@ def resource_media_fields(document, resource):
 
     .. versionadded:: 0.3
     """
-    media_fields = app.config['DOMAIN'][resource]['_media']
+    media_fields = app.config["DOMAIN"][resource]["_media"]
     return [field for field in media_fields if field in document]
 
 
@@ -873,10 +1156,10 @@ def resolve_sub_resource_path(document, resource):
         return
 
     resource_def = config.DOMAIN[resource]
-    schema = resource_def['schema']
+    schema = resource_def["schema"]
     fields = []
     for field, value in request.view_args.items():
-        if field in schema and field != resource_def['id_field']:
+        if field in schema and field != resource_def["id_field"]:
             fields.append(field)
             document[field] = value
 
@@ -885,7 +1168,7 @@ def resolve_sub_resource_path(document, resource):
 
 
 def resolve_user_restricted_access(document, resource):
-    """ Adds user restricted access medadata to the document if applicable.
+    """ Adds user restricted access metadata to the document if applicable.
 
     :param document: the document being posted or replaced
     :param resource: the resource to which the document belongs
@@ -900,9 +1183,9 @@ def resolve_user_restricted_access(document, resource):
     """
     # if 'user-restricted resource access' is enabled and there's
     # an Auth request active, inject the username into the document
-    resource_def = app.config['DOMAIN'][resource]
-    auth = resource_def['authentication']
-    auth_field = resource_def['auth_field']
+    resource_def = app.config["DOMAIN"][resource]
+    auth = resource_def["authentication"]
+    auth_field = resource_def["auth_field"]
     if auth and auth_field:
         request_auth_value = auth.get_request_auth_value()
         if request_auth_value:
@@ -915,14 +1198,13 @@ def resolve_document_etag(documents, resource):
     .. versionadded:: 0.5
     """
     if config.IF_MATCH:
-        ignore_fields = config.DOMAIN[resource]['etag_ignore_fields']
+        ignore_fields = config.DOMAIN[resource]["etag_ignore_fields"]
 
         if not isinstance(documents, list):
             documents = [documents]
 
         for document in documents:
-            document[config.ETAG] =\
-                document_etag(document, ignore_fields=ignore_fields)
+            document[config.ETAG] = document_etag(document, ignore_fields=ignore_fields)
 
 
 def pre_event(f):
@@ -938,20 +1220,21 @@ def pre_event(f):
 
     .. versionadded:: 0.2
     """
+
     @wraps(f)
     def decorated(*args, **kwargs):
         method = request.method
-        if method == 'HEAD':
-            method = 'GET'
+        if method == "HEAD":
+            method = "GET"
 
-        event_name = 'on_pre_' + method
+        event_name = "on_pre_" + method
         resource = args[0] if args else None
         gh_params = ()
         rh_params = ()
-        if method in ('GET', 'PATCH', 'DELETE', 'PUT'):
+        if method in ("GET", "PATCH", "DELETE", "PUT"):
             gh_params = (resource, request, kwargs)
             rh_params = (request, kwargs)
-        elif method in ('POST', ):
+        elif method in ("POST",):
             # POST hook does not support the kwargs argument
             gh_params = (resource, request)
             rh_params = (request,)
@@ -960,13 +1243,14 @@ def pre_event(f):
         getattr(app, event_name)(*gh_params)
         if resource:
             # resource hook
-            getattr(app, event_name + '_' + resource)(*rh_params)
+            getattr(app, event_name + "_" + resource)(*rh_params)
 
         combined_args = kwargs
         if len(args) > 1:
             combined_args.update(args[1].items())
         r = f(resource, **combined_args)
         return r
+
     return decorated
 
 
@@ -989,14 +1273,16 @@ def document_link(resource, document_id, version=None):
     .. versionchanged:: 0.0.3
        Now returning a JSON link
     """
-    version_part = '?version=%s' % version if version else ''
-    return {'title': '%s' % config.DOMAIN[resource]['item_title'],
-            'href': '%s/%s%s' % (resource_link(), document_id, version_part)}
+    version_part = "?version=%s" % version if version else ""
+    return {
+        "title": "%s" % config.DOMAIN[resource]["item_title"],
+        "href": "%s/%s%s" % (resource_link(), document_id, version_part),
+    }
 
 
 def resource_link():
     """ Returns the current resource path relative to the API entry point.
-    Mostly going to be used by hatoeas functions when building
+    Mostly going to be used by hateoas functions when building
     document/resource links. The resource URL stored in the config settings
     might contain regexes and custom variable names, all of which are not
     needed in the response payload.
@@ -1006,18 +1292,18 @@ def resource_link():
 
     .. versionadded:: 0.4
     """
-    path = request.path.strip('/')
+    path = request.path.strip("/")
 
-    if '|item' in request.endpoint:
-        path = path[:path.rfind('/')]
+    if request.endpoint and "|item" in request.endpoint:
+        path = path[: path.rfind("/")]
 
     def strip_prefix(hit):
-        return path[len(hit):] if path.startswith(hit) else path
+        return path[len(hit) :] if path.startswith(hit) else path
 
     if config.URL_PREFIX:
-        path = strip_prefix(config.URL_PREFIX + '/')
+        path = strip_prefix(config.URL_PREFIX + "/")
     if config.API_VERSION:
-        path = strip_prefix(config.API_VERSION + '/')
+        path = strip_prefix(config.API_VERSION + "/")
     return path
 
 
@@ -1028,7 +1314,7 @@ def oplog_push(resource, document, op, id=None):
         'r' = resource endpoint,
         'o' = operation performed,
         'i' = unique id of the document involved,
-        'pi' = client IP,
+        'ip' = client IP,
         'c' = changes
 
     config.LAST_UPDATED, config.LAST_CREATED and AUTH_FIELD are not being
@@ -1052,7 +1338,12 @@ def oplog_push(resource, document, op, id=None):
 
     .. versionadded:: 0.5
     """
-    if not config.OPLOG or op not in config.OPLOG_METHODS:
+
+    if (
+        not config.OPLOG
+        or op not in config.OPLOG_METHODS
+        or resource not in config.URLS
+    ):
         return
 
     resource_def = config.DOMAIN[resource]
@@ -1068,10 +1359,13 @@ def oplog_push(resource, document, op, id=None):
     entries = []
     for update in updates:
         entry = {
-            'r': config.URLS[resource],
-            'o': op,
-            'i': (update[resource_def['id_field']]
-                  if resource_def['id_field'] in update else id),
+            "r": config.URLS[resource],
+            "o": op,
+            "i": (
+                update[resource_def["id_field"]]
+                if resource_def["id_field"] in update
+                else id
+            ),
         }
         if config.LAST_UPDATED in update:
             last_update = update[config.LAST_UPDATED]
@@ -1079,19 +1373,19 @@ def oplog_push(resource, document, op, id=None):
             last_update = datetime.utcnow().replace(microsecond=0)
         entry[config.LAST_UPDATED] = entry[config.DATE_CREATED] = last_update
         if config.OPLOG_AUDIT:
-            entry['ip'] = request.remote_addr
+            entry["ip"] = request.remote_addr
 
-            auth = resource_def['authentication']
-            entry['u'] = auth.get_user_or_token() if auth else 'n/a'
+            auth = resource_def["authentication"]
+            entry["u"] = auth.get_user_or_token() if auth else "n/a"
 
             if op in config.OPLOG_CHANGE_METHODS:
                 # these fields are already contained in 'entry'.
-                del(update[config.LAST_UPDATED])
+                del (update[config.LAST_UPDATED])
                 # legacy documents (v0.4 or less) could be missing the etag
                 # field
                 if config.ETAG in update:
-                    del(update[config.ETAG])
-                entry['c'] = update
+                    del (update[config.ETAG])
+                entry["c"] = update
             else:
                 pass
 

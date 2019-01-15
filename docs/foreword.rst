@@ -10,7 +10,7 @@ should not be using it.
 Philosophy
 ----------
 You have data stored somewhere and you want to expose it to your users
-through a RESTful Web API. Eve is the tool that allows you to do so. 
+through a RESTful Web API. Eve is the tool that allows you to do so.
 
 Eve provides a robust, feature rich, REST-centered API implementation,
 and you just need to configure your API settings and behavior, plug in your
@@ -41,12 +41,6 @@ number of use cases. I could then release it as an open source project. Well
 it turned out to be slightly more complex than that but finally here it is, and
 of course it's called Eve.
 
-It still has a long way to go before it becomes the fully featured open source,
-out-of-the-box API solution I envision (see the Roadmap below), but
-I feel that at this point the codebase is ready for a public preview.
-This will hopefully allow for some constructive feedback and maybe, for some
-contributors to join the ranks.
-
 REST, Flask and MongoDB
 -----------------------
 The slides from my EuroPython talk, *Developing RESTful Web APIs with Flask and
@@ -54,7 +48,7 @@ MongoDB*, are `available online`_. You might want to check them out to understan
 why and how certain design decisions were made, especially with regards to REST
 implementation.
 
-BSD License 
+BSD License
 -----------
 A large number of open source projects you find today are GPL Licensed. While
 the GPL has its time and place, it should most certainly not be your go-to

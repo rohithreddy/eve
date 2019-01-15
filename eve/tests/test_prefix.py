@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
 
-URL_PREFIX = 'prefix'
-DOMAIN = {'contacts': {}}
+RESOURCE_METHODS = ["GET", "POST"]
+URL_PREFIX = "prefix"
+DOMAIN = {"contacts": {}}

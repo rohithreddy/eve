@@ -110,7 +110,7 @@ document being returned. The ``_links`` list provides HATEOAS_ directives.
 Sub Resources
 ~~~~~~~~~~~~~
 Endpoints support sub-resources so you could have something like:
-``people/<contact_id>/invoices``. When setting the ``url`` rule for such and
+``people/<contact_id>/invoices``. When setting the ``url`` rule for such an
 endpoint you would use a regex and assign a field name to it:
 
 .. code-block:: python
@@ -119,14 +119,13 @@ endpoint you would use a regex and assign a field name to it:
         'url': 'people/<regex("[a-f0-9]{24}"):contact_id>/invoices'
         ...
 
-Then this GET to the endpoint, which would roughly translate to *give
-me all the invoices by <contact_id>*:
+Then, a GET to the following endpoint:
 
 ::
 
     people/51f63e0838345b6dcd7eabff/invoices
 
-Would cause the underlying database collection invoices to be queried this way:
+would cause the underlying database to be queried like this:
 
 ::
 
@@ -174,6 +173,42 @@ a simple resource endpoint the document lookup would happen on a single field:
 ::
 
     invoices/<invoice_id>
+
+
+Endpoints that supports sub-resources will have a specific behavior on
+``DELETE`` operations. A ``DELETE`` to the following endpoint:
+
+::
+
+    people/51f63e0838345b6dcd7eabff/invoices
+
+would cause the deletion of all the documents that match follow query:
+
+::
+
+    {'contact_id': '51f63e0838345b6dcd7eabff'}
+
+
+Therefore, for sub-resource endpoints, only the documents satisfying the
+endpoint semantic will be deleted. This differs from the standard behavior,
+whereas a delete operation on a collection enpoint will cause the deletion of
+all the documents in the collection.
+
+Another example. A ``DELETE`` to the following item endpoint:
+
+::
+
+    people/51f63e0838345b6dcd7eabff/invoices/1
+
+would cause the deletion all the documents matched by the follow query:
+
+::
+
+    {'contact_id': '51f63e0838345b6dcd7eabff', "<invoice_id>": 1}
+
+This behaviour enables support for typical tree structures, where the id of the
+resource alone is not necessarily a primary key by itself.
+
 
 .. _custom_item_endpoints:
 
@@ -246,28 +281,47 @@ As you can see, item endpoints provide their own HATEOAS_ directives.
 Filtering
 ---------
 Resource endpoints allow consumers to retrieve multiple documents. Query
-strings are supported, allowing for filtering and sorting. Two query syntaxes
-are supported. The mongo query syntax:
+strings are supported, allowing for filtering and sorting. Both native Mongo
+queries and Python conditional expressions are supported.
+
+Here we are asking for all documents where ``lastname`` value is ``Doe``:
 
 ::
 
     http://eve-demo.herokuapp.com/people?where={"lastname": "Doe"}
 
-which translates to the following ``curl`` request:
+With ``curl`` you would go like this:
 
 .. code-block:: console
 
     $ curl -i -g http://eve-demo.herokuapp.com/people?where={%22lastname%22:%20%22Doe%22}
     HTTP/1.1 200 OK
 
-and the native Python syntax:
+Filtering on embedded document fields is possible:
+
+::
+
+    http://eve-demo.herokuapp.com/people?where={"location.city": "San Francisco"}
+
+Date fields are also easy to query on:
+
+::
+
+    http://eve-demo.herokuapp.com/people?where={"born": {"$gte":"Wed, 25 Feb 1987 17:00:00 GMT"}}
+
+Date values should conform to RFC1123. Should you need a different format, you can change the ``DATE_FORMAT`` setting.
+
+In general you will find that most `MongoDB queries`_ "just work". Should you
+need it, ``MONGO_QUERY_BLACKLIST`` allows you to blacklist unwanted operators.
+
+Native Python syntax works like this:
 
 .. code-block:: console
 
     $ curl -i http://eve-demo.herokuapp.com/people?where=lastname=="Doe"
     HTTP/1.1 200 OK
 
-Both query formats allow for conditional and logical And/Or operators, however
+Both syntaxes allow for conditional and logical And/Or operators, however
 nested and combined.
 
 Filters are enabled by default on all document fields. However, the API
@@ -279,6 +333,44 @@ filters is the way to go.
 You also have the option to validate the incoming filters against the resource's
 schema and refuse to apply the filtering if any filters are invalid, by using the
 ``VALIDATE_FILTERING`` system setting (see :ref:`global`)
+
+Pretty Printing
+---------------
+You can pretty print the response by specifying a query parameter named
+``pretty``:
+
+.. code-block:: console
+
+    $ curl -i http://eve-demo.herokuapp.com/people?pretty
+    HTTP/1.1 200 OK
+
+    {
+        "_items": [
+            {
+                "_updated": "Tue, 19 Apr 2016 08:19:00 GMT",
+                "firstname": "John",
+                "lastname": "Doe",
+                "born": "Thu, 27 Aug 1970 14:37:13 GMT",
+                "role": [
+                    "author"
+                ],
+                "location": {
+                    "city": "Auburn",
+                    "address": "422 South Gay Street"
+                },
+                "_links": {
+                    "self": {
+                        "href": "people/5715e9f438345b3510d27eb8",
+                        "title": "person"
+                    }
+                },
+                "_created": "Tue, 19 Apr 2016 08:19:00 GMT",
+                "_id": "5715e9f438345b3510d27eb8",
+                "_etag": "86dc6b45fe7e2f41f1ca53a0e8fda81224229799"
+            },
+            ...
+        ]
+    }
 
 
 Sorting
@@ -312,7 +404,7 @@ Would return documents sorted by lastname in descending order.
 Sorting is enabled by default and can be disabled both globally and/or at
 resource level (see ``SORTING`` in :ref:`global` and ``sorting`` in
 :ref:`domain`). It is also possible to set the default sort at every API
-endpoints (see ``default_sort`` in :ref:`domain`). 
+endpoints (see ``default_sort`` in :ref:`domain`).
 
 .. admonition:: Please note
 
@@ -387,19 +479,19 @@ is at ``examples.com/api/v1``, the ``self`` link in the above example would
 mean that the *people* endpoint is located at ``examples.com/api/v1/people``.
 
 Please note that ``next``, ``previous`` and ``last`` items will only be
-included when appropriate. 
+included when appropriate.
 
 Disabling HATEOAS
 ~~~~~~~~~~~~~~~~~
 HATEOAS can be disabled both at the API and/or resource level. Why would you
 want to turn HATEOAS off? Well, if you know that your client application is not
 going to use the feature, then you might want to save on both bandwidth and
-performance. 
+performance.
 
-.. _jsonxml:
+.. _rendering:
 
-JSON and XML Rendering
-----------------------
+Rendering
+---------
 Eve responses are automatically rendered as JSON (the default) or XML,
 depending on the request ``Accept`` header. Inbound documents (for inserts and
 edits) are in JSON format.
@@ -418,10 +510,18 @@ edits) are in JSON format.
         <link rel="child" href="works" title="works" />
     </resource>
 
-XML support can be disabled by setting ``XML`` to ``False`` in the settings
-file. JSON support can be disabled by setting ``JSON`` to ``False``.  Please
-note that at least one mime type must always be enabled, either implicitly or
-explicitly. By default, both are supported.
+Default renderers might be changed by editing ``RENDERERS`` value in the settings file.
+
+.. code-block:: python
+
+    RENDERERS = [
+        'eve.render.JSONRenderer',
+        'eve.render.XMLRenderer'
+    ]
+
+You can create your own renderer by subclassing ``eve.render.Renderer``. Each
+renderer should set valid ``mime`` attr and have ``.render()`` method implemented.
+Please note that at least one renderer must always be enabled.
 
 .. _conditional_requests:
 
@@ -434,14 +534,14 @@ conditional requests by using the ``If-Modified-Since`` header:
 
 .. code-block:: console
 
-    $ curl -H "If-Modified-Since: Wed, 05 Dec 2012 09:53:07 GMT" -i http://eve-demo.herokuapp.com/people/521d6840c437dc0002d1203c 
+    $ curl -H "If-Modified-Since: Wed, 05 Dec 2012 09:53:07 GMT" -i http://eve-demo.herokuapp.com/people/521d6840c437dc0002d1203c
     HTTP/1.1 200 OK
 
 or the ``If-None-Match`` header:
 
 .. code-block:: console
 
-    $ curl -H "If-None-Match: 1234567890123456789012345678901234567890" -i http://eve-demo.herokuapp.com/people/521d6840c437dc0002d1203c 
+    $ curl -H "If-None-Match: 1234567890123456789012345678901234567890" -i http://eve-demo.herokuapp.com/people/521d6840c437dc0002d1203c
     HTTP/1.1 200 OK
 
 
@@ -504,9 +604,13 @@ Disabling concurrency control
 If your use case requires, you can opt to completely disable concurrency
 control. ETag match checks can be disabled by setting the ``IF_MATCH``
 configuration variable to ``False`` (see :ref:`global`). When concurrency
-control is disabled no etag is provided with responses. You should be careful
+control is disabled no ETag is provided with responses. You should be careful
 about disabling this feature, as you would effectively open your API to the
-risk of older versions replacing your documents.
+risk of older versions replacing your documents. Alternatively, ETag match
+checks can be made optional by the client if ``ENFORCE_IF_MATCH`` is disabled.
+When concurrency check enforcement is disabled, requests with the ``If-Match``
+header will be processed as conditional requests, and requests made without
+the ``If-Match`` header will not be processed as conditional.
 
 .. _bulk_insert:
 
@@ -532,7 +636,11 @@ metadata:
         "_links": {"self": {"href": "people/50ae43339fa12500024def5b", "title": "person"}}
     }
 
-However, in order to reduce the number of loopbacks, a client might also submit
+When a ``201 Created`` is returned following a POST request, the ``Location``
+header is also included with the response. Its value is the URI to the new
+document.
+
+In order to reduce the number of loopbacks, a client might also submit
 multiple documents with a single request. All it needs to do is enclose the
 documents in a JSON list:
 
@@ -566,9 +674,13 @@ The response will be a list itself, with the state of each document:
     }
 
 When multiple documents are submitted the API takes advantage of MongoDB *bulk
-insert* capabilities which means that not only there's just one single request
-traveling from the client to the remote API, but also that only one loopback is
+insert* capabilities which means that not only there's just one request
+traveling from the client to the remote API, but also that a single loopback is
 performed between the API server and the database.
+
+In case of successful multiple inserts, keep in mind that the ``Location``
+header only returns the URI of the first created document.
+
 
 Data Validation
 ---------------
@@ -602,7 +714,7 @@ request:
     ]
 
 In the example above, the first document did not validate so the whole request
-has been rejected. 
+has been rejected.
 
 When all documents pass validation and are inserted correctly the response
 status is ``201 Created``. If any document fails validation the response status
@@ -717,9 +829,13 @@ well. For more information see :ref:`auth`.
 
 CORS Cross-Origin Resource Sharing
 ----------------------------------
-Disabled by default, CORS_ allows web pages to work with REST APIs, something
-that is usually restricted by most browsers 'same domain' security policy.
 Eve-powered APIs can be accessed by the JavaScript contained in web pages.
+Disabled by default, CORS_ allows web pages to work with REST APIs, something
+that is usually restricted by most browsers 'same domain' security policy. The
+``X_DOMAINS`` setting allows to specify which domains are allowed to perform
+CORS requests. A list of regular expressions may be defined in ``X_DOMAINS_RE``, which is useful for websites with dynamic ranges of subdomains. Make sure to
+anchor and escape the regexes properly, for example
+``X_DOMAINS_RE = ['^http://sub-\d{3}\.example\.com$']``.
 
 JSONP Support
 -------------
@@ -731,7 +847,7 @@ In general you don't really want to add JSONP when you can enable CORS instead:
     browsers now support CORS making it a viable cross-browser alternative (source_.)
 
 There are circumstances however when you do need JSONP, like when you have to
-support legacy software (IE6 anyone?) 
+support legacy software (IE6 anyone?)
 
 To enable JSONP in Eve you just set
 ``JSONP_ARGUMENT``. Then, any valid request with ``JSONP_ARGUMENT`` will get
@@ -744,7 +860,7 @@ back a response wrapped with said argument value. For example if you set
     hello(<JSON here>)
 
 Requests with no ``callback`` argument will be served with no JSONP.
- 
+
 
 Read-only by default
 --------------------
@@ -755,7 +871,7 @@ Default and Nullable Values
 ---------------------------
 Fields can have default values and nullable types. When serving POST (create)
 requests, missing fields will be assigned the configured default values. See
-``default`` and ``nullable`` keywords in :ref:`schema` for more informations.
+``default`` and ``nullable`` keywords in :ref:`schema` for more information.
 
 Predefined Database Filters
 ---------------------------
@@ -928,6 +1044,12 @@ individually configured at the resource level using the domain configuration
 ``soft_delete`` setting. See :ref:`global` and :ref:`domain` for more
 information on enabling and configuring soft delete.
 
+When soft deletion is enabled, callbacks attached to
+``on_delete_resource_originals`` and
+``on_delete_resource_originals_<resource_name>`` events will receive both
+deleted and not deleted documents via the ``originals`` argument (see
+:ref:`eventhooks`).
+
 Behavior
 ~~~~~~~~
 With soft delete enabled, DELETE requests to individual items and resources
@@ -1031,15 +1153,15 @@ Pre-Request Event Hooks
 ~~~~~~~~~~~~~~~~~~~~~~~
 When a GET/HEAD, POST, PATCH, PUT, DELETE request is received, both
 a ``on_pre_<method>`` and a ``on_pre_<method>_<resource>`` event is raised.
-You can subscribe to these events with multiple callback functions. 
+You can subscribe to these events with multiple callback functions.
 
 .. code-block:: pycon
 
     >>> def pre_get_callback(resource, request, lookup):
-    ...  print 'A GET request on the "%s" endpoint has just been received!' % resource
+    ...  print('A GET request on the "%s" endpoint has just been received!' % resource)
 
     >>> def pre_contacts_get_callback(request, lookup):
-    ...  print 'A GET request on the contacts endpoint has just been received!'
+    ...  print('A GET request on the contacts endpoint has just been received!')
 
     >>> app = Eve()
 
@@ -1051,13 +1173,13 @@ You can subscribe to these events with multiple callback functions.
 Callbacks will receive the resource being requested, the original
 ``flask.request`` object and the current lookup dictionary as arguments (only
 exception being the ``on_pre_POST`` hook which does not provide a ``lookup``
-argument). 
+argument).
 
 Dynamic Lookup Filters
 ^^^^^^^^^^^^^^^^^^^^^^
 Since the ``lookup`` dictionary will be used by the data layer to retrieve
 resource documents, developers may choose to alter it in order to add custom
-logic to the lookup query. 
+logic to the lookup query.
 
 .. code-block:: python
 
@@ -1074,7 +1196,7 @@ Altering the lookup dictionary at runtime would have similar effects to
 applying :ref:`filter` via configuration. However, you can only set static
 filters via configuration whereas by hooking to the ``on_pre_<METHOD>`` events
 you are allowed to set dynamic filters instead, which allows for additional
-flexibility. 
+flexibility.
 
 Post-Request Event Hooks
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1087,10 +1209,10 @@ payload.
 .. code-block:: pycon
 
     >>> def post_get_callback(resource, request, payload):
-    ...  print 'A GET on the "%s" endpoint was just performed!' % resource
+    ...  print('A GET on the "%s" endpoint was just performed!' % resource)
 
     >>> def post_contacts_get_callback(request, payload):
-    ... print 'A get on "contacts" was just performed!'
+    ...  print('A get on "contacts" was just performed!')
 
     >>> app = Eve()
 
@@ -1134,81 +1256,87 @@ both. And for each action two events will be fired:
 
 Let's see an overview of what events are available:
 
-+-------+--------+------+-------------------------------------------------+
-|Action |What    |When  |Event name / method signature                    |
-+=======+========+======+=================================================+
-|Fetch  |Resource|After || ``on_fetched_resource``                        |
-|       |        |      || ``def event(resource_name, response)``         |
-|       |        |      +-------------------------------------------------+
-|       |        |      || ``on_fetched_resource_<resource_name>``        |
-|       |        |      || ``def event(response)``                        |
-|       +--------+------+-------------------------------------------------+
-|       |Item    |After || ``on_fetched_item``                            |
-|       |        |      || ``def event(resource_name, response)``         |
-|       |        |      +-------------------------------------------------+
-|       |        |      || ``on_fetched_item_<resource_name>``            |
-|       |        |      || ``def event(response)``                        |
-+-------+--------+------+-------------------------------------------------+
-|Insert |Items   |Before|| ``on_insert``                                  |
-|       |        |      || ``def event(resource_name, items)``            |
-|       |        |      +-------------------------------------------------+
-|       |        |      || ``on_insert_<resource_name>``                  |
-|       |        |      || ``def event(items)``                           |
-|       |        +------+-------------------------------------------------+
-|       |        |After || ``on_inserted``                                |
-|       |        |      || ``def event(resource_name, items)``            |
-|       |        |      +-------------------------------------------------+
-|       |        |      || ``on_inserted_<resource_name>``                |
-|       |        |      || ``def event(items)``                           |
-+-------+--------+------+-------------------------------------------------+
-|Replace|Item    |Before|| ``on_replace``                                 |
-|       |        |      || ``def event(resource_name, item, original)``   |
-|       |        |      +-------------------------------------------------+
-|       |        |      || ``on_replace_<resource_name>``                 |
-|       |        |      || ``def event(item, original)``                  |
-|       |        +------+-------------------------------------------------+
-|       |        |After || ``on_replaced``                                |
-|       |        |      || ``def event(resource_name, item, original)``   |
-|       |        |      +-------------------------------------------------+
-|       |        |      || ``on_replaced_<resource_name>``                |
-|       |        |      || ``def event(item, original)``                  |
-+-------+--------+------+-------------------------------------------------+
-|Update |Item    |Before|| ``on_update``                                  |
-|       |        |      || ``def event(resource_name, updates, original)``|
-|       |        |      +-------------------------------------------------+
-|       |        |      || ``on_update_<resource_name>``                  |
-|       |        |      || ``def event(updates, original)``               |
-|       |        +------+-------------------------------------------------+
-|       |        |After || ``on_updated``                                 |
-|       |        |      || ``def event(resource_name, updates, original)``|
-|       |        |      +-------------------------------------------------+
-|       |        |      || ``on_updated_<resource_name>``                 |
-|       |        |      || ``def event(updates, original)``               |
-+-------+--------+------+-------------------------------------------------+
-|Delete |Item    |Before|| ``on_delete_item``                             |
-|       |        |      || ``def event(resource_name, item)``             |
-|       |        |      +-------------------------------------------------+
-|       |        |      || ``on_delete_item_<resource_name>``             |
-|       |        |      || ``def event(item)``                            |
-|       |        +------+-------------------------------------------------+
-|       |        |After || ``on_deleted_item``                            |
-|       |        |      || ``def event(resource_name, item)``             |
-|       |        |      +-------------------------------------------------+
-|       |        |      || ``on_deleted_item_<resource_name>``            |
-|       |        |      || ``def event(item)``                            |
-|       +--------+------+-------------------------------------------------+
-|       |Resource|Before|| ``on_delete_resource``                         |
-|       |        |      || ``def event(resource_name, item)``             |
-|       |        |      +-------------------------------------------------+
-|       |        |      || ``on_delete_resource_<resource_name>``         |
-|       |        |      || ``def event(item)``                            |
-|       |        +------+-------------------------------------------------+
-|       |        |After || ``on_deleted_resource``                        |
-|       |        |      || ``def event(resource_name, item)``             |
-|       |        |      +-------------------------------------------------+
-|       |        |      || ``on_deleted_resource_<resource_name>``        |
-|       |        |      || ``def event(item)``                            |
-+-------+--------+------+-------------------------------------------------+
++-------+--------+------+--------------------------------------------------+
+|Action |What    |When  |Event name / method signature                     |
++=======+========+======+==================================================+
+|Fetch  |Resource|After || ``on_fetched_resource``                         |
+|       |        |      || ``def event(resource_name, response)``          |
+|       |        |      +--------------------------------------------------+
+|       |        |      || ``on_fetched_resource_<resource_name>``         |
+|       |        |      || ``def event(response)``                         |
+|       +--------+------+--------------------------------------------------+
+|       |Item    |After || ``on_fetched_item``                             |
+|       |        |      || ``def event(resource_name, response)``          |
+|       |        |      +--------------------------------------------------+
+|       |        |      || ``on_fetched_item_<resource_name>``             |
+|       |        |      || ``def event(response)``                         |
++-------+--------+------+--------------------------------------------------+
+|Insert |Items   |Before|| ``on_insert``                                   |
+|       |        |      || ``def event(resource_name, items)``             |
+|       |        |      +--------------------------------------------------+
+|       |        |      || ``on_insert_<resource_name>``                   |
+|       |        |      || ``def event(items)``                            |
+|       |        +------+--------------------------------------------------+
+|       |        |After || ``on_inserted``                                 |
+|       |        |      || ``def event(resource_name, items)``             |
+|       |        |      +--------------------------------------------------+
+|       |        |      || ``on_inserted_<resource_name>``                 |
+|       |        |      || ``def event(items)``                            |
++-------+--------+------+--------------------------------------------------+
+|Replace|Item    |Before|| ``on_replace``                                  |
+|       |        |      || ``def event(resource_name, item, original)``    |
+|       |        |      +--------------------------------------------------+
+|       |        |      || ``on_replace_<resource_name>``                  |
+|       |        |      || ``def event(item, original)``                   |
+|       |        +------+--------------------------------------------------+
+|       |        |After || ``on_replaced``                                 |
+|       |        |      || ``def event(resource_name, item, original)``    |
+|       |        |      +--------------------------------------------------+
+|       |        |      || ``on_replaced_<resource_name>``                 |
+|       |        |      || ``def event(item, original)``                   |
++-------+--------+------+--------------------------------------------------+
+|Update |Item    |Before|| ``on_update``                                   |
+|       |        |      || ``def event(resource_name, updates, original)`` |
+|       |        |      +--------------------------------------------------+
+|       |        |      || ``on_update_<resource_name>``                   |
+|       |        |      || ``def event(updates, original)``                |
+|       |        +------+--------------------------------------------------+
+|       |        |After || ``on_updated``                                  |
+|       |        |      || ``def event(resource_name, updates, original)`` |
+|       |        |      +--------------------------------------------------+
+|       |        |      || ``on_updated_<resource_name>``                  |
+|       |        |      || ``def event(updates, original)``                |
++-------+--------+------+--------------------------------------------------+
+|Delete |Item    |Before|| ``on_delete_item``                              |
+|       |        |      || ``def event(resource_name, item)``              |
+|       |        |      +--------------------------------------------------+
+|       |        |      || ``on_delete_item_<resource_name>``              |
+|       |        |      || ``def event(item)``                             |
+|       |        +------+--------------------------------------------------+
+|       |        |After || ``on_deleted_item``                             |
+|       |        |      || ``def event(resource_name, item)``              |
+|       |        |      +--------------------------------------------------+
+|       |        |      || ``on_deleted_item_<resource_name>``             |
+|       |        |      || ``def event(item)``                             |
+|       +--------+------+--------------------------------------------------+
+|       |Resource|Before|| ``on_delete_resource``                          |
+|       |        |      || ``def event(resource_name)``                    |
+|       |        |      +--------------------------------------------------+
+|       |        |      || ``on_delete_resource_<resource_name>``          |
+|       |        |      || ``def event()``                                 |
+|       |        |      +--------------------------------------------------+
+|       |        |      || ``on_delete_resource_originals``                |
+|       |        |      || ``def event(resource_name, originals, lookup)`` |
+|       |        |      +--------------------------------------------------+
+|       |        |      || ``on_delete_resource_originals_<resource_name>``|
+|       |        |      || ``def event(originals, lookup)``                |
+|       |        +------+--------------------------------------------------+
+|       |        |After || ``on_deleted_resource``                         |
+|       |        |      || ``def event(resource_name, item)``              |
+|       |        |      +--------------------------------------------------+
+|       |        |      || ``on_deleted_resource_<resource_name>``         |
+|       |        |      || ``def event(item)``                             |
++-------+--------+------+--------------------------------------------------+
 
 
 
@@ -1229,26 +1357,26 @@ the items as needed before they are returned to the client.
 .. code-block:: pycon
 
     >>> def before_returning_items(resource_name, response):
-    ...  print 'About to return items from "%s" ' % resource_name
+    ...  print('About to return items from "%s" ' % resource_name)
 
     >>> def before_returning_contacts(response):
-    ...  print 'About to return contacts'
+    ...  print('About to return contacts')
 
     >>> def before_returning_item(resource_name, response):
-    ...  print 'About to return an item from "%s" ' % resource_name
+    ...  print('About to return an item from "%s" ' % resource_name)
 
     >>> def before_returning_contact(response):
-    ...  print 'About to return a contact'
+    ...  print('About to return a contact')
 
     >>> app = Eve()
     >>> app.on_fetched_resource += before_returning_items
     >>> app.on_fetched_resource_contacts += before_returning_contacts
     >>> app.on_fetched_item += before_returning_item
-    >>> app.on_fetched_item_contact += before_returning_contact
+    >>> app.on_fetched_item_contacts += before_returning_contact
 
 It is important to note that fetch events will work with `Document
 Versioning`_ for specific document versions or accessing all document
-versions with ``?version=all``, but they *will not* work when acessing diffs
+versions with ``?version=all``, but they *will not* work when accessing diffs
 of all versions with ``?version=diffs``.
 
 
@@ -1263,7 +1391,7 @@ These are the insert events with their method signature:
 - ``on_inserted_<resource_name>(items)``
 
 When a POST requests hits the API and new items are about to be stored in
-the database, these vents are fired:
+the database, these events are fired:
 
 - ``on_insert`` for every resource endpoint.
 - ``on_insert_<resource_name>`` for the specific `<resource_name>` resource
@@ -1288,10 +1416,10 @@ Example:
 .. code-block:: pycon
 
     >>> def before_insert(resource_name, items):
-    ...  print 'About to store items to "%s" ' % resource
+    ...  print('About to store items to "%s" ' % resource)
 
     >>> def after_insert_contacts(items):
-    ...  print 'About to store contacts'
+    ...  print('About to store contacts')
 
     >>> app = Eve()
     >>> app.on_insert += before_insert
@@ -1322,7 +1450,7 @@ accessory action.
 After the item has been replaced, these other two events are fired:
 
 - ``on_replaced`` for any resource item endpoint.
-- ``on_replaced_<resource_name>`` for the specific resource endpont.
+- ``on_replaced_<resource_name>`` for the specific resource endpoint.
 
 Update Events
 ^^^^^^^^^^^^^
@@ -1346,7 +1474,7 @@ the item in the database that is about to be updated. Callback functions
 could hook into these events to arbitrarily add or update fields in
 `updates`, or to perform other accessory action.
 
-`After` the item has been updated: 
+`After` the item has been updated:
 
 - ``on_updated`` is fired for any resource endpoint.
 - ``on_updated_<resource_name>`` is fired only when the `<resource_name>`
@@ -1369,6 +1497,8 @@ These are the delete events with their method signature:
 - ``on_deleted_item_<resource_name>(item)``
 - ``on_delete_resource(resource_name)``
 - ``on_delete_resource_<resource_name>()``
+- ``on_delete_resource_originals(originals, lookup)``
+- ``on_delete_resource_originals_<resource_name>(originals, lookup)``
 - ``on_deleted_resource(resource_name)``
 - ``on_deleted_resource_<resource_name>()``
 
@@ -1398,6 +1528,47 @@ If you were brave enough to enable the DELETE command on resource endpoints
 notified of such a disastrous occurrence by hooking a callback function to the
 ``on_delete_resource(resource_name)`` or
 ``on_delete_resource_<resource_name>()`` hooks.
+
+- ``on_delete_resource_originals`` for any resource hit by the request after having retrieved the originals documents.
+- ``on_delete_resource_originals_<resource_name>`` for the specific `<resource_name>` resource endpoint
+  hit by the DELETE after having retrieved the original document.
+
+NOTE: those two event are useful in order to perform some business
+logic before the actual remove operation given the look up and the
+list of originals
+
+.. _aggregation_hooks:
+
+Aggregation event hooks
+~~~~~~~~~~~~~~~~~~~~~~~
+You can also attach one or more callbacks to your aggregation endpoints. The
+``before_aggregation`` event is fired when an aggregation is about to be
+performed. Any attached callback function will receive both the endpoint name
+and the aggregation pipeline as arguments. The pipeline can then be altered if
+needed.
+
+.. code-block:: pycon
+
+    >>> def on_aggregate(endpoint, pipeline):
+    ...   pipeline.append({"$unwind": "$tags"})
+
+    >>> app = Eve()
+    >>> app.before_aggregation += on_aggregate
+
+The ``after_aggregation`` event is fired when the aggregation has been
+performed. An attached callback function could leverage this event to modify
+the documents before they are returned to the client.
+
+.. code-block:: pycon
+
+   >>> def alter_documents(endpoint, documents):
+   ...   for document in documents:
+   ...     document['hello'] = 'well, hello!'
+
+   >>> app = Eve()
+   >>> app.after_aggregation += alter_documents
+
+For more information on aggregation support, see :ref:`aggregation`
 
 
 .. admonition:: Please note
@@ -1442,7 +1613,7 @@ File Storage
 ------------
 Media files (images, pdf, etc.) can be uploaded as ``media`` document
 fields. Upload is done via ``POST``, ``PUT`` and
-``PATCH`` as usual, but using the ``multipart/data-form`` content-type.
+``PATCH`` as usual, but using the ``multipart/form-data`` content-type.
 
 Let us assume that the ``accounts`` endpoint has a schema like this:
 
@@ -1484,13 +1655,13 @@ When a document is requested media files will be returned as Base64 strings,
             }
         ]
         ...
-   } 
+   }
 
 However, if the ``EXTENDED_MEDIA_INFO`` list is populated (it isn't by
 default) the payload format will be different. This flag allows passthrough
 from the driver of additional meta fields. For example, using the MongoDB
 driver, fields like ``content_type``, ``name`` and ``length`` can be added to
-this list and will be passed-through from the underlying driver. 
+this list and will be passed-through from the underlying driver.
 
 When ``EXTENDED_MEDIA_INFO`` is used the field will be a dictionary
 whereas the file itself is stored under the ``file`` key and other keys
@@ -1519,7 +1690,7 @@ Then the output will be something like
         ...
     }
 
-For MongoDB, further fields can be found in the `driver documentation`_. 
+For MongoDB, further fields can be found in the `driver documentation`_.
 
 If you have other means to retrieve the media files (custom Flask endpoint for
 example) then the media files can be excluded from the payload by setting to
@@ -1532,7 +1703,7 @@ While returning files embedded as Base64 fields is the default behaviour, you
 can opt for serving them at a dedicated media endpoint. You achieve that by
 setting ``RETURN_MEDIA_AS_URL`` to ``True``. When this feature is enabled
 document fields contain urls to the correspondent files, which are served at the
-media endpoint. 
+media endpoint.
 
 You can change the default media endpoint (``media``) by updating the
 ``MEDIA_BASE_URL`` and ``MEDIA_ENDPOINT`` setting. Suppose you are storing your
@@ -1553,6 +1724,31 @@ set your media endpoint like so:
 
 Setting ``MEDIA_BASE_URL`` is optional. If no value is set, then
 the API base address will be used when building the URL for ``MEDIA_ENDPOINT``.
+
+.. _partial_request:
+
+Partial media downloads
+~~~~~~~~~~~~~~~~~~~~~~~
+When files are served at a dedicated endpoint, clients can request partial
+downloads. This allows them to provide features such as optimized
+pause/resume (with no need to restart the download). To perform a partial
+download, make sure the ``Range`` header is added the the client request.
+
+    .. code-block:: console
+
+        $ curl http://localhost/media/yourfile -i -H "Range: bytes=0-10"
+        HTTP/1.1 206 PARTIAL CONTENT
+        Date: Sun, 20 Aug 2017 14:26:42 GMT
+        Content-Type: audio/mp4
+        Content-Length: 11
+        Connection: keep-alive
+        Content-Range: bytes 0-10/23671
+        Last-Modified: Sat, 19 Aug 2017 03:25:36 GMT
+        Accept-Ranges: bytes
+
+        abcdefghilm
+
+In the snippet above, we see curl requesting the first chunk of a file.
 
 .. _projection_filestorage:
 
@@ -1602,19 +1798,19 @@ response payloads by sending requests like this one:
     - :ref:`datasource`
 
     for details on the ``datasource`` setting.
-    
+
 .. _multipart:
 
-Note on media files as ``multipart/data-form``
+Note on media files as ``multipart/form-data``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-If you are uploading media files as ``multipart/data-form`` all the
-additional fields except the file fields will be treated as ``strings`` 
+If you are uploading media files as ``multipart/form-data`` all the
+additional fields except the file fields will be treated as ``strings``
 for all field validation purposes.  If you have already defined some of
 the resource fields to be of different type (boolean, number, list etc)
 the validation rules for these fields would fail, preventing you to
-succesffully submit your resource.
+successffully submit your resource.
 
-If you still want to be able to perform field validation in this case, you 
+If you still want to be able to perform field validation in this case, you
 will have to turn on ``MULTIPART_FORM_FIELDS_AS_JSON`` in your settings
 file in order to treat the incoming fields as JSON encoded strings and still
 be able to validate your fields.
@@ -1622,7 +1818,7 @@ be able to validate your fields.
 Please note, that in case you indeed turn on ``MULTIPART_FORM_FIELDS_AS_JSON``
 you will have to submit all resource fields as properly encoded JSON strings.
 
-For example a ``number`` should be submited as ``1234`` (as you would normally 
+For example a ``number`` should be submited as ``1234`` (as you would normally
 expect). A ``boolean`` will have to be send as ``true`` (note the lowercase
 ``t``). A ``list`` of strings as ``["abc", "xyz"]``. And finally
 a ``string``, which is the thing that will most likely trip, you will have
@@ -1630,6 +1826,15 @@ to be submitted as ``"'abc'"`` (note that it is surrounded with double
 quotes). If ever in doubt if what you are submitting is a valid JSON string
 you can try passing it from the JSON Validator at http://jsonlint.com/ to
 be sure that it is correct.
+
+.. _media_lists:
+
+Using lists of media
+~~~~~~~~~~~~~~~~~~~~
+When using lists of media, there is no way to submit these in the default
+configuration. Enable ``AUTO_COLLAPSE_MULTI_KEYS`` and ``AUTO_CREATE_LISTS``
+to make this possible. This allows to send multiple values for one key in
+``multipart/form-data`` requests and in this way upload a list of files.
 
 .. _geojson_feature:
 
@@ -1645,12 +1850,12 @@ encoded in GeoJSON_ format. All GeoJSON objects supported by MongoDB_ are availa
     - ``Polygon``
     - ``MultiPolygon``
     - ``GeometryCollection``
-      
-These are implemented as native Eve data types (see :ref:`schema`) so they are
-are subject to proper validation.
+
+All these objects are implemented as native Eve data types (see :ref:`schema`)
+so they are are subject to the proper validation.
 
 In the example below we are extending the `people` endpoint by adding
-a ``location`` field is of type Point_.
+a ``location`` field of type Point_.
 
 .. code-block:: javascript
 
@@ -1661,7 +1866,7 @@ a ``location`` field is of type Point_.
         },
         ...
     }
-    
+
 Storing a contact along with its location is pretty straightforward:
 
 .. code-block:: console
@@ -1669,19 +1874,26 @@ Storing a contact along with its location is pretty straightforward:
     $ curl -d '[{"firstname": "barack", "lastname": "obama", "location": {"type":"Point","coordinates":[100.0,10.0]}}]' -H 'Content-Type: application/json'  http://127.0.0.1:5000/people
     HTTP/1.1 201 OK
 
+Eve also supports GeoJSON ``Feature`` and ``FeatureCollection`` objects, which
+are not explicitely mentioned in MongoDB_ documentation. GeoJSON specification
+allows object to contain any number of members (name/value pairs). Eve
+validation was implemented to be more strict, allowing only two members. This
+restriction can be disabled by setting ``ALLOW_CUSTOM_FIELDS_IN_GEOJSON`` to
+``True``.
+
 Querying GeoJSON Data
 ~~~~~~~~~~~~~~~~~~~~~
 As a general rule all MongoDB `geospatial query operators`_ and their associated
 geometry specifiers are supported. In this example we are using the `$near`_
 operator to query for all contacts living in a location within 1000 meters from
 a certain point:
-    
+
 ::
 
     ?where={"location": {"$near": {"$geometry": {"type":"Point", "coordinates": [10.0, 20.0]}, "$maxDistance": 1000}}}
 
 Please refer to MongoDB documentation for details on geo queries.
-	
+
 .. _internal_resources:
 
 Internal Resources
@@ -1720,7 +1932,7 @@ Something like this:
 
 .. code-block:: python
    :emphasize-lines: 12
-    
+
     from eve import Eve
 
     def on_generic_inserted(self, resource, documents):
@@ -1756,7 +1968,7 @@ attributes:
 ``clientip``                        IP address of the client performing the
                                     request.
 
-``url``                             Full request URL, eventual query parameters 
+``url``                             Full request URL, eventual query parameters
                                     included.
 
 ``method``                          Request method (``POST``, ``GET``, etc.)
@@ -1788,7 +2000,7 @@ time a custom function is invoked.
         # enable logging to 'app.log' file
         handler = logging.FileHandler('app.log')
 
-        # set a custom log format, and add request 
+        # set a custom log format, and add request
         # metadata to each log line
         handler.setFormatter(logging.Formatter(
             '%(asctime)s %(levelname)s: %(message)s '
@@ -1796,7 +2008,7 @@ time a custom function is invoked.
             'url: %(url)s, method:%(method)s'))
 
         # the default log level is set to WARNING, so
-        # we have to explictly set the logging level 
+        # we have to explicitly set the logging level
         # to INFO to get our custom message logged.
         app.logger.setLevel(logging.INFO)
 
@@ -1809,7 +2021,7 @@ time a custom function is invoked.
 
 Currently only exceptions raised by the MongoDB layer and ``POST``, ``PATCH``
 and ``PUT`` methods are logged. The idea is to also add some ``INFO`` and
-possibly ``DEBUG`` level events in the future. 
+possibly ``DEBUG`` level events in the future.
 
 .. _oplog:
 
@@ -1821,7 +2033,7 @@ oplog is simply a server log. What makes it a little bit different is that it
 can be exposed as a read-only endpoint, thus allowing clients to query it as
 they would with any other API endpoint.
 
-Every oplog entry contains informations about the document and the operation:
+Every oplog entry contains information about the document and the operation:
 
 - Operation performed
 - Unique ID of the document
@@ -1841,48 +2053,48 @@ If ``OPLOG_AUDIT`` is enabled entries also expose:
 
 - client IP
 - Username or token, if available
-- changes applied to the document (for ``DELETE`` the whole document is included). 
+- changes applied to the document (for ``DELETE`` the whole document is included).
 
 A typical oplog entry looks like this:
 
 .. code-block:: python
 
     {
-        "o": "DELETE", 
-        "r": "people", 
+        "o": "DELETE",
+        "r": "people",
         "i": "542d118938345b614ea75b3c",
         "c": {...},
         "ip": "127.0.0.1",
         "u": "admin",
-        "_updated": "Fri, 03 Oct 2014 08:16:52 GMT", 
+        "_updated": "Fri, 03 Oct 2014 08:16:52 GMT",
         "_created": "Fri, 03 Oct 2014 08:16:52 GMT",
         "_etag": "e17218fbca41cb0ee6a5a5933fb9ee4f4ca7e5d6"
-        "_id": "542e5b7438345b6dadf95ba5", 
+        "_id": "542e5b7438345b6dadf95ba5",
         "_links": {...},
     }
 
-To save a little space (at least on MongoDB) field names have been shortened: 
+To save a little space (at least on MongoDB) field names have been shortened:
 
 - ``o`` stands for operation performed
 - ``r`` stands for resource endpoint
 - ``i`` stands for document id
 - ``ip`` is the client IP
-- ``u`` stands for user (or token) 
-- ``c`` stands for changes occurred 
+- ``u`` stands for user (or token)
+- ``c`` stands for changes occurred
 - ``extra`` is an optional field which you can use to store custom data
-  
+
 ``_created`` and ``_updated`` are relative to the target document, which comes
 handy in a variety of scenarios (like when the oplog is available to clients,
 more on this later).
 
 Please note that by default the ``c`` (changes) field is not included for
 ``POST`` operations. You can add ``POST`` to the ``OPLOG_CHANGE_METHODS``
-setting (see :ref:`global`) if you whish the whole document to be included on
+setting (see :ref:`global`) if you wish the whole document to be included on
 every insertion.
 
 How is the oplog operated?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
-Six settings are dedicated to the OpLog:
+Seven settings are dedicated to the OpLog:
 
 - ``OPLOG`` switches the oplog feature on and off. Defaults to ``False``.
 - ``OPLOG_NAME`` is the name of the oplog collection on the database. Defaults to ``oplog``.
@@ -1895,15 +2107,15 @@ Six settings are dedicated to the OpLog:
 
 As you can see the oplog feature is turned off by default. Also, since
 ``OPLOG_ENDPOINT`` defaults to ``None``, even if you switch the feature on no
-public oplog endpoint will be available. You will have to explictly set the
-endpoint name in order to expose your oplog to the public. 
+public oplog endpoint will be available. You will have to explicitly set the
+endpoint name in order to expose your oplog to the public.
 
 The Oplog endpoint
 ~~~~~~~~~~~~~~~~~~
 Since the oplog endpoint is nothing but a standard API endpoint, you can
 customize it. This allows for setting up custom authentication (you might want
 this resource to be only accessible for administrative purposes) or any other
-useful setting. 
+useful setting.
 
 Note that while you can change most of its settings, the endpoint will always
 be read-only so setting either ``resource_methods`` or ``item_methods`` to
@@ -1926,7 +2138,7 @@ Every time the oplog is about to be updated the ``on_oplog_push`` event is fired
 You can hook one or more callback functions to this event. Callbacks receive
 ``resource`` and ``entries`` as arguments. The former is the resource name
 while the latter is a list of oplog entries which are about to be written to
-disk. 
+disk.
 
 Your callback can add an optional ``extra`` field to canonical oplog entries.
 The field can be of any type. In this example we are adding a custom dict to
@@ -1943,13 +2155,13 @@ each entry:
     app.on_oplog_push += oplog_extras
     app.run()
 
-Please note that unless you explictly set ``OPLOG_RETURN_EXTRA_FIELD`` to
+Please note that unless you explicitly set ``OPLOG_RETURN_EXTRA_FIELD`` to
 ``True``, the ``extra`` field will *not* be returned by the ``OPLOG_ENDPOINT``.
 
-.. note:: 
+.. note::
 
     Are you on MongoDB? Consider making the oplog a `capped collection`_. Also,
-    in case you are wondering yes, the Eve oplog is blatantly inpsired by the
+    in case you are wondering yes, the Eve oplog is blatantly inspired by the
     awesome `Replica Set Oplog`_.
 
 .. _schema_endpoint:
@@ -1960,7 +2172,7 @@ Resource schema can be exposed to API clients by enabling Eve's schema
 endpoint. To do so, set the ``SCHEMA_ENDPOINT`` configuration option to the API
 endpoint name from which you want to serve schema data. Once enabled, Eve will
 treat the endpoint as a read only resource containing JSON encoded Cerberus
-schema definitons, indexed by resource name. Resource visibility and
+schema definitions, indexed by resource name. Resource visibility and
 authorization settings are honored, so internal resources or resources for
 which a request does not have read authentication will not be accessible at the
 schema endpoint. By default, ``SCHEMA_ENDPOINT`` is set to ``None``.
@@ -1985,8 +2197,8 @@ collections ``OrderedDict`` where explicit ordering is required eg ``$sort``:
         'datasource': {
             'aggregation': {
                 'pipeline': [
-                    {"$unwind": "$tags"}, 
-                    {"$group": {"_id": "$tags", "count": {"$sum": 1}}}, 
+                    {"$unwind": "$tags"},
+                    {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
                     {"$sort": SON([("count", -1), ("_id", -1)])}
                 ]
             }
@@ -2003,8 +2215,8 @@ Let's update the pipeline a little bit:
         'datasource': {
             'aggregation': {
                 'pipeline': [
-                    {"$unwind": "$tags"}, 
-                    {"$group": {"_id": "$tags", "count": {"$sum": "$value"}}}, 
+                    {"$unwind": "$tags"},
+                    {"$group": {"_id": "$tags", "count": {"$sum": "$value"}}},
                     {"$sort": SON([("count", -1), ("_id", -1)])}
                 ]
             }
@@ -2012,7 +2224,7 @@ Let's update the pipeline a little bit:
     }
 
 As you can see the `count` field is now going to sum the value of ``$value``,
-which will be set by the client upon perfoming the request:
+which will be set by the client upon performing the request:
 
 ::
 
@@ -2022,16 +2234,18 @@ The request above will cause the aggregation to be executed on the server with
 a `count` field configured as if it was a static ``{"$sum": 2}``. The client
 simply adds the ``aggregate`` query parameter and then passes a dictionary with
 field/value pairs. Like with all other keywords, you can change ``aggregate``
-to a keyword of your liking, just set ``QUERY_AGGREGATION`` in your settings. 
+to a keyword of your liking, just set ``QUERY_AGGREGATION`` in your settings.
 
 You can also set all options natively supported by PyMongo. For more
-informations on aggregation see :ref:`datasource`.
+information on aggregation see :ref:`datasource`.
+
+Custom callback functions can be attached to the ``before_aggregation`` and ``after_aggregation`` event hooks. For more information, see :ref:`aggregation_hooks`.
 
 Limitations
 ~~~~~~~~~~~
 ``HATEOAS`` is not available at aggregation endpoints. This should not
 be surprising as documents returned by these endpoints are aggregation results
-and do not reside on the database, so there is no static link available for them. 
+and do not reside on the database, so there is no static link available for them.
 
 Client pagination (``?page=2``) is enabled by default. This is currently
 achieved by injecting two additional stages (``$limit`` first, then ``$skip``)
@@ -2050,7 +2264,7 @@ documentation (link_):
     When a ``$sort`` immediately precedes a ``$limit`` in the pipeline, the
     sort operation only maintains the top **n** results as it progresses, where
     **n** is the specified limit, and MongoDB only needs to store **n** items
-    in memory. 
+    in memory.
 
 As we just saw earlier, pagination adds a ``$limit`` stage to the end of the
 pipeline. So if pagination is enabled and ``$sort`` is the last stage of your
@@ -2060,12 +2274,13 @@ A single endpoint cannot serve both regular and aggregation results. However,
 since it is possible to setup multiple endpoints all serving from the same
 datasource (see :ref:`source`), similar functionality can be easily achieved.
 
+
 MongoDB and SQL Support
 ------------------------
 Support for single or multiple MongoDB database/servers comes out of the box.
 An SQLAlchemy extension provides support for SQL backends. Additional data
 layers can can be developed with relative ease. Visit the `extensions page`_
-for a list of community developed data layers and extensions. 
+for a list of community developed data layers and extensions.
 
 Powered by Flask
 ----------------
@@ -2075,20 +2290,20 @@ niceties, like a built-in development server and debugger_, integrated support
 for unittesting_ and an `extensive documentation`_.
 
 .. _HATEOAS: http://en.wikipedia.org/wiki/HATEOAS
-.. _Cerberus: https://github.com/nicolaiarocci/cerberus
+.. _Cerberus: https://github.com/pyeve/cerberus
 .. _REST: http://en.wikipedia.org/wiki/Representational_state_transfer
 .. _CRUD: http://en.wikipedia.org/wiki/Create,_read,_update_and_delete
 .. _`CORS`: http://en.wikipedia.org/wiki/Cross-origin_resource_sharing
-.. _`PostgreSQL effort`: https://github.com/nicolaiarocci/eve/issues/17
+.. _`PostgreSQL effort`: https://github.com/pyeve/eve/issues/17
 .. _Flask: http://flask.pocoo.org
 .. _debugger: http://flask.pocoo.org/docs/quickstart/#debug-mode
 .. _unittesting: http://flask.pocoo.org/docs/testing/
 .. _`extensive documentation`: http://flask.pocoo.org/docs/
 .. _`this`: https://speakerdeck.com/nicola/developing-restful-web-apis-with-python-flask-and-mongodb?slide=113
-.. _Events: https://github.com/nicolaiarocci/events
+.. _Events: https://github.com/pyeve/events
 .. _`MongoDB Data Model Design`: http://docs.mongodb.org/manual/core/data-model-design
 .. _GridFS: http://docs.mongodb.org/manual/core/gridfs/
-.. _MediaStorage: https://github.com/nicolaiarocci/eve/blob/develop/eve/io/media.py
+.. _MediaStorage: https://github.com/pyeve/eve/blob/develop/eve/io/media.py
 .. _`driver documentation`: http://api.mongodb.org/python/2.7rc0/api/gridfs/grid_file.html#gridfs.grid_file.GridOut
 .. _GeoJSON: http://geojson.org/
 .. _Point: http://geojson.org/geojson-spec.html#point
@@ -2099,6 +2314,7 @@ for unittesting_ and an `extensive documentation`_.
 .. _`Replica Set Oplog`: http://docs.mongodb.org/manual/core/replica-set-oplog/
 .. _`extensions page`: http://python-eve.org/extensions
 .. _source: http://en.wikipedia.org/wiki/JSONP
-.. _`LogRecord attributes`: https://docs.python.org/2/library/logging.html#logrecord-attributes 
+.. _`LogRecord attributes`: https://docs.python.org/2/library/logging.html#logrecord-attributes
 .. _`MongoDB Aggregation Framework`: https://docs.mongodb.org/v3.0/applications/aggregation/
 .. _link: https://docs.mongodb.org/manual/reference/operator/aggregation/limit/
+.. _`MongoDB queries`: https://docs.mongodb.com/v3.2/reference/operator/query/

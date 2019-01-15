@@ -4,7 +4,7 @@
 
     GridFS media storage for Eve-powered APIs.
 
-    :copyright: (c) 2016 by Nicola Iarocci.
+    :copyright: (c) 2017 by Nicola Iarocci.
     :license: BSD, see LICENSE for more details.
 """
 from bson import ObjectId
@@ -41,10 +41,10 @@ class GridFSMediaStorage(MediaStorage):
         instance.
         """
         if self.app is None:
-            raise TypeError('Application object cannot be None')
+            raise TypeError("Application object cannot be None")
 
         if not isinstance(self.app, Flask):
-            raise TypeError('Application object must be a Eve application')
+            raise TypeError("Application object must be a Eve application")
 
     def fs(self, resource=None):
         """ Provides the instance-level GridFS instance, instantiating it if
@@ -55,8 +55,7 @@ class GridFSMediaStorage(MediaStorage):
         """
         driver = self.app.data
         if driver is None or not isinstance(driver, Mongo):
-            raise TypeError("Application data object must be of eve.io.Mongo "
-                            "type.")
+            raise TypeError("Application data object must be of eve.io.Mongo " "type.")
 
         px = driver.current_mongo_prefix(resource)
         if px not in self._fs:
@@ -67,7 +66,7 @@ class GridFSMediaStorage(MediaStorage):
         """ Returns the file given by unique id. Returns None if no file was
         found.
 
-        .. vesionchanged: 0.6
+        .. versionchanged: 0.6
            Support for _id as string.
         """
         if isinstance(_id, str_type):
@@ -89,8 +88,9 @@ class GridFSMediaStorage(MediaStorage):
         """ Saves a new file in GridFS. Returns the unique id of the stored
         file. Also stores content type of the file.
         """
-        return self.fs(resource).put(content, filename=filename,
-                                     content_type=content_type)
+        return self.fs(resource).put(
+            content, filename=filename, content_type=content_type
+        )
 
     def delete(self, _id, resource=None):
         """ Deletes the file referenced by unique id.
